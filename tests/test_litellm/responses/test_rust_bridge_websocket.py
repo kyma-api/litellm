@@ -51,13 +51,13 @@ def reset_responses_websocket():
 def test_rust_websocket_bridge_is_disabled_without_flag() -> None:
     assert not _rust_responses_websocket_enabled("openai", GenericLiteLLMParams())
     assert not _rust_responses_websocket_enabled("anthropic", GenericLiteLLMParams(rust=True))
-    assert _rust_responses_websocket_enabled("openai", GenericLiteLLMParams(rust=True))
+    assert not _rust_responses_websocket_enabled("openai", GenericLiteLLMParams(rust=True))
 
 
-def test_explicit_false_overrides_process_enable() -> None:
+def test_request_value_does_not_override_process_enable() -> None:
     configuration.rust(True)
 
-    assert not _rust_responses_websocket_enabled("openai", GenericLiteLLMParams(rust=False))
+    assert _rust_responses_websocket_enabled("openai", GenericLiteLLMParams(rust=False))
 
 
 def test_process_enable_applies_without_request_override() -> None:

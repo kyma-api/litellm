@@ -283,10 +283,10 @@ def test_env_var_enables_rust_ocr(monkeypatch):
         assert rust_bridge.rust_ocr_enabled() is True
 
 
-def test_explicit_false_overrides_process_enable():
+def test_request_value_does_not_override_process_enable():
     litellm.rust(True)
 
-    assert ocr_main._rust_ocr_enabled(build_prepared_request(litellm_params={"rust": False})) is False
+    assert ocr_main._rust_ocr_enabled(build_prepared_request(litellm_params={"rust": False})) is True
 
 
 def test_load_rust_ocr_returns_injected_impl():
@@ -871,7 +871,7 @@ def test_ocr_passes_default_request_timeout_to_rust(fake_bridge):
     assert fake_bridge.calls[0]["timeout_seconds"] == float(request_timeout)
 
 
-@pytest.mark.parametrize("disable_source", ("default", "environment", "process", "request"))
+@pytest.mark.parametrize("disable_source", ("default", "environment", "process"))
 def test_ocr_disabled_never_loads_or_prepares_native_bridge(
     monkeypatch: pytest.MonkeyPatch,
     disable_source: str,
@@ -890,14 +890,7 @@ def test_ocr_disabled_never_loads_or_prepares_native_bridge(
         monkeypatch.setenv("LITELLM_RUST", "0")
     if disable_source == "process":
         litellm.rust(False)
-    if disable_source == "request":
-        litellm.rust(True)
-
-    response: Final = (
-        litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test", rust=False)
-        if disable_source == "request"
-        else litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
-    )
+    response: Final = litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
     assert isinstance(response, OCRResponse)
     python_ocr.assert_called_once()

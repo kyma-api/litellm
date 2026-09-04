@@ -283,15 +283,15 @@ async def test_gate_uses_process_enable_without_request_override():
 
 
 @pytest.mark.asyncio
-async def test_gate_skips_rust_when_flag_false():
-    bridge = ExplodingAsyncMessages()
+async def test_request_value_does_not_override_process_enable():
+    bridge = RecordingAsyncMessages()
     litellm.rust(True)
     rust_messages.set_rust_messages(amessages=bridge)
 
     response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure", rust=False))
 
-    assert response is None
-    assert bridge.calls == 0
+    assert response is not None
+    assert len(bridge.calls) == 1
 
 
 @pytest.mark.asyncio

@@ -112,7 +112,7 @@ def _accepts(**overrides) -> bool:
         "messages": MESSAGES,
         "optional_params": {"max_tokens": 16},
         "custom_llm_provider": "anthropic",
-        "litellm_params": {"rust": True},
+        "litellm_params": {},
         "stream": None,
     }
     kwargs.update(overrides)
@@ -129,19 +129,21 @@ class TestGate:
         assert _accepts(litellm_params={"rust": False}) is False
         assert gate.calls == [], "the gate must not be consulted before opt-in"
 
-    def test_accepts_when_the_deployment_opted_in_and_the_core_agrees(self, monkeypatch):
+    def test_accepts_when_the_process_opted_in_and_the_core_agrees(self, monkeypatch):
         monkeypatch.delenv("LITELLM_RUST", raising=False)
         gate = _RecordingDecline()
         bridge.set_rust_chat_completions(decline=gate)
+        configuration.rust(True)
         assert _accepts() is True
         assert gate.calls[0]["model"] == "claude-sonnet-4-5"
         assert gate.calls[0]["custom_llm_provider"] == "anthropic"
 
-    def test_explicit_false_overrides_process_enable(self):
+    def test_request_values_do_not_override_process_configuration(self):
         bridge.set_rust_chat_completions(decline=_RecordingDecline())
-        configuration.rust(True)
+        assert _accepts(litellm_params={"rust": True}) is False
 
-        assert _accepts(litellm_params={"rust": False}) is False
+        configuration.rust(True)
+        assert _accepts(litellm_params={"rust": False}) is True
 
     def test_process_enable_applies_without_request_override(self):
         bridge.set_rust_chat_completions(decline=_RecordingDecline())
@@ -173,6 +175,7 @@ class TestGate:
         monkeypatch.delenv("LITELLM_RUST", raising=False)
         gate = _RecordingDecline()
         bridge.set_rust_chat_completions(decline=gate)
+        configuration.rust(True)
         assert _accepts(litellm_params={"rust": True, "metadata": {"user_id": "u-123"}}) is False
         assert gate.calls == [], "the core must not be consulted for a request it cannot see the key of"
 
@@ -199,6 +202,7 @@ class TestGate:
         monkeypatch.delenv("LITELLM_RUST", raising=False)
         gate = _RecordingDecline()
         bridge.set_rust_chat_completions(decline=gate)
+        configuration.rust(True)
         bedrock = {
             "custom_llm_provider": "bedrock",
             "model": "bedrock/us-east-1/anthropic.claude-v2",
@@ -214,16 +218,19 @@ class TestGate:
 
     def test_declines_when_the_core_declines(self, monkeypatch):
         monkeypatch.delenv("LITELLM_RUST", raising=False)
+        configuration.rust(True)
         bridge.set_rust_chat_completions(decline=_RecordingDecline("streaming"))
         assert _accepts() is False
 
     def test_declines_when_the_bridge_is_unavailable(self, monkeypatch):
         monkeypatch.delenv("LITELLM_RUST", raising=False)
+        configuration.rust(True)
         _hide_native_bridge(monkeypatch)
         assert _accepts() is False
 
     def test_declines_when_the_gate_itself_raises(self, monkeypatch):
         monkeypatch.delenv("LITELLM_RUST", raising=False)
+        configuration.rust(True)
 
         def exploding(**_kwargs):
             raise RuntimeError("boom")

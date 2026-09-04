@@ -26,14 +26,11 @@ def _parse_env_bool(value: str | None) -> bool | None:
 
 def resolve_rust_enabled(
     *,
-    request_override: bool | None,
     process_override: bool | None,
     environment_override: bool | None,
     legacy_environment_override: bool | None = None,
     release_default: bool = DEFAULT_RUST_ENABLED,
 ) -> bool:
-    if request_override is not None:
-        return request_override
     if process_override is not None:
         return process_override
     if environment_override is not None:
@@ -43,9 +40,7 @@ def resolve_rust_enabled(
     return release_default
 
 
-def rust_enabled(*, request_override: bool | None = None) -> bool:
-    if request_override is not None:
-        return request_override
+def rust_enabled() -> bool:
     process_override: Final = _CONFIGURATION.override
     if process_override is not None:
         return process_override
@@ -58,15 +53,14 @@ def rust_enabled(*, request_override: bool | None = None) -> bool:
             stacklevel=2,
         )
     return resolve_rust_enabled(
-        request_override=None,
         process_override=None,
         environment_override=global_override,
         legacy_environment_override=legacy_override,
     )
 
 
-def rust_ocr_enabled(*, request_override: bool | None = None) -> bool:
-    return rust_enabled(request_override=request_override)
+def rust_ocr_enabled() -> bool:
+    return rust_enabled()
 
 
 def reset_rust_configuration() -> None:

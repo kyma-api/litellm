@@ -183,9 +183,7 @@ def _prepare_ocr_request(
 
 
 def _rust_ocr_enabled(prepared_request: _PreparedOCRRequest) -> bool:
-    raw_request_override: Final = prepared_request.litellm_params.get("rust")
-    request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
-    return rust_ocr_bridge.rust_ocr_enabled(request_override=request_override)
+    return rust_ocr_bridge.rust_ocr_enabled()
 
 
 def _should_attempt_rust_ocr(prepared_request: _PreparedOCRRequest) -> bool:

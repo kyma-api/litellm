@@ -27,22 +27,19 @@ def _isolated_configuration(  # pyright: ignore[reportUnusedFunction]  # pytest 
 
 
 @pytest.mark.parametrize(
-    ("request_override", "process", "environment", "legacy_environment", "release_default", "expected"),
+    ("process", "environment", "legacy_environment", "release_default", "expected"),
     (
-        (False, True, True, True, True, False),
-        (True, False, False, False, False, True),
-        (None, False, True, True, True, False),
-        (None, True, False, False, False, True),
-        (None, None, False, True, True, False),
-        (None, None, True, False, False, True),
-        (None, None, None, False, True, False),
-        (None, None, None, True, False, True),
-        (None, None, None, None, False, False),
-        (None, None, None, None, True, True),
+        (False, True, True, True, False),
+        (True, False, False, False, True),
+        (None, False, True, True, False),
+        (None, True, False, False, True),
+        (None, None, False, True, False),
+        (None, None, True, False, True),
+        (None, None, None, False, False),
+        (None, None, None, True, True),
     ),
 )
 def test_resolution_precedence(
-    request_override: bool | None,
     process: bool | None,
     environment: bool | None,
     legacy_environment: bool | None,
@@ -51,7 +48,6 @@ def test_resolution_precedence(
 ) -> None:
     assert (
         configuration.resolve_rust_enabled(
-            request_override=request_override,
             process_override=process,
             environment_override=environment,
             legacy_environment_override=legacy_environment,
@@ -71,7 +67,6 @@ def test_process_override_wins_over_environment(monkeypatch: pytest.MonkeyPatch)
     configuration.rust(True)
 
     assert configuration.rust_enabled() is True
-    assert configuration.rust_enabled(request_override=False) is False
 
 
 def test_global_environment_accepts_explicit_false(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,10 +105,9 @@ def test_process_override_and_reset_apply_to_existing_threads(monkeypatch: pytes
         assert executor.submit(configuration.rust_ocr_enabled).result() is True
 
 
-def test_explicit_override_precedes_invalid_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_process_override_precedes_invalid_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_RUST", "sometimes")
 
-    assert configuration.rust_enabled(request_override=False) is False
     configuration.rust(True)
     assert configuration.rust_enabled() is True
 
