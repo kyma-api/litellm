@@ -280,8 +280,12 @@ def _rust_bridge_exceptions() -> tuple[type[BaseException], type[BaseException]]
     native_bridge: Final = get_native_bridge()
     if native_bridge is None:
         return None
-    declined: Final = getattr(native_bridge, "RustBridgeDeclined", None)
-    upstream: Final = getattr(native_bridge, "RustUpstreamError", None)
+    declined: Final = getattr(native_bridge, "RustPreparationError", None) or getattr(
+        native_bridge, "RustBridgeDeclined", None
+    )
+    upstream: Final = getattr(native_bridge, "RustExecutionError", None) or getattr(
+        native_bridge, "RustUpstreamError", None
+    )
     if declined is None or upstream is None:
         return None
     return declined, upstream
@@ -310,8 +314,12 @@ def _reraise_or_decline(
     declined, upstream_failed = exceptions
     if isinstance(rust_error, upstream_failed):
         args: Final = rust_error.args
-        status: Final = args[0] if args else 0
-        message: Final = args[1] if len(args) > 1 else ""
+        attribute_status: Final = getattr(rust_error, "status_code", None)
+        attribute_message: Final = getattr(rust_error, "message", None)
+        status: Final = attribute_status if isinstance(attribute_status, int) else (args[0] if args else 0)
+        message: Final = (
+            attribute_message if isinstance(attribute_message, str) else (args[1] if len(args) > 1 else str(rust_error))
+        )
         raise APIError(
             status_code=int(status) or 500,
             message=f"litellm rust chat completions: {message}",

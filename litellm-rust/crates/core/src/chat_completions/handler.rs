@@ -1,25 +1,26 @@
 use serde_json::Value;
 
-use crate::error::Error;
+use crate::error::{Error, ErrorCode, ProviderState};
 use crate::http_utils::{http_request, truncate_error_body};
 
 use super::client::http_client;
-use super::prepare::prepare_provider_request;
 use super::transformation::ChatCompletionsAuth;
 use super::types::{
-    ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
-    ResolvedChatCompletionsRequest,
+    ChatCompletionsResponse, PreparedChatCompletions, ProviderChatCompletionsRequest,
+    ProviderChatResponseData,
 };
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_chat_completions_provider_call(
-    request: ResolvedChatCompletionsRequest<'_>,
+    prepared: PreparedChatCompletions,
 ) -> Result<ChatCompletionsResponse, Error> {
-    let request = prepare_provider_request(request)?;
-    let body = serde_json::to_vec(&request.body).map_err(|err| {
-        Error::InvalidRequest(format!(
-            "failed to serialize chat completions request: {err}"
-        ))
+    let request = prepared.request;
+    let body = serde_json::to_vec(&request.body).map_err(|error| {
+        Error::prepare_with_source(
+            ErrorCode::InvalidRequest,
+            "failed to serialize chat completions request",
+            error,
+        )
     })?;
     let headers = signed_headers(&request, &body).await?;
 
@@ -31,53 +32,53 @@ pub(super) async fn execute_chat_completions_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = http_request(request_builder).await.map_err(|err| {
-        // Failing to establish the connection means the request never went out,
-        // so the host can still serve it. Everything else here, a timeout
-        // above all, may have reached the provider and been answered.
-        if err.is_connect() || err.is_builder() {
-            Error::Connect(err.to_string())
+    let response = http_request(request_builder).await.map_err(|error| {
+        if error.is_connect() || error.is_builder() {
+            Error::execute_with_source(
+                ErrorCode::Transport,
+                "could not reach the provider",
+                None,
+                ProviderState::NotStarted,
+                error,
+            )
         } else {
-            Error::Network(err.to_string())
+            Error::execute_with_source(
+                ErrorCode::Transport,
+                "chat completions provider request failed",
+                None,
+                ProviderState::MayHaveStarted,
+                error,
+            )
         }
     })?;
 
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+    let text = response.text().await.map_err(|error| {
+        Error::execute_with_source(
+            ErrorCode::Transport,
+            "reading chat completions provider response failed",
+            None,
+            ProviderState::ResponseReceived,
+            error,
+        )
+    })?;
 
     if !status.is_success() {
-        return Err(Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        });
+        return Err(Error::upstream(status.as_u16(), truncate_error_body(&text)));
     }
 
-    let body: Value = serde_json::from_str(&text).map_err(|err| {
-        Error::InvalidResponse(format!("invalid chat completions response JSON: {err}"))
+    let body: Value = serde_json::from_str(&text).map_err(|error| {
+        Error::execute_with_source(
+            ErrorCode::InvalidResponse,
+            "invalid chat completions response JSON",
+            None,
+            ProviderState::ResponseReceived,
+            error,
+        )
     })?;
     request
         .config
         .transform_response(&request.model, ProviderChatResponseData { body })
-        .map_err(as_response_error)
-}
-
-/// Re-tag an error raised while normalizing a response the provider already
-/// returned.
-///
-/// A config reports the same variants on either side of the call: a missing
-/// field or an unsupported block can mean "this request cannot be translated"
-/// during prepare and "this response cannot be normalized" here. Only the
-/// second kind has already been billed, and a host that keeps a reference
-/// implementation must not retry those, so collapse them to one variant that
-/// can only mean the provider was already called.
-pub(super) fn as_response_error(err: Error) -> Error {
-    match err {
-        already @ (Error::InvalidResponse(_) | Error::Http { .. }) => already,
-        other => Error::InvalidResponse(other.to_string()),
-    }
 }
 
 #[cfg(feature = "bedrock-auth")]
@@ -105,7 +106,7 @@ pub(super) async fn signed_headers(
         .iter()
         .any(|(name, _)| is_sigv4_computed_header(name))
     {
-        return Err(Error::Unsupported(
+        return Err(Error::unsupported(
             "request forwards a header AWS SigV4 computes",
         ));
     }
@@ -143,7 +144,7 @@ pub(super) async fn signed_headers(
     _body: &[u8],
 ) -> Result<Vec<(String, String)>, Error> {
     match &request.auth {
-        ChatCompletionsAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
+        ChatCompletionsAuth::AwsSigV4 { .. } => Err(Error::unsupported(
             "AWS SigV4 requires the bedrock-auth feature",
         )),
         _ => Ok(request.upstream_headers.clone()),

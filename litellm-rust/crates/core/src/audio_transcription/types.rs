@@ -16,7 +16,6 @@ pub struct AudioTranscriptionRequest<'a> {
     pub timeout: Option<Duration>,
 }
 
-#[derive(Clone)]
 pub struct ProviderAudioTranscriptionRequest {
     pub(super) model: String,
     pub(super) custom_llm_provider: String,

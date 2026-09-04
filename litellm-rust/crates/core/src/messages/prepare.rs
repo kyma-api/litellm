@@ -1,4 +1,4 @@
-use crate::error::Error;
+use crate::error::{Error, ErrorCode};
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
@@ -19,7 +19,7 @@ pub(super) fn prepare_provider_request(
                 })
         })
         .ok_or_else(|| {
-            Error::InvalidProvider(
+            Error::invalid_provider(
                 "unable to resolve custom_llm_provider for messages request".to_string(),
             )
         })?;
@@ -27,20 +27,26 @@ pub(super) fn prepare_provider_request(
     let provider = provider_info.custom_llm_provider;
 
     let config = messages_provider_config(provider)
-        .ok_or_else(|| Error::InvalidProvider(provider.to_string()))?;
+        .ok_or_else(|| Error::invalid_provider(provider.to_string()))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
     let headers =
         validate_environment(config, request.extra_headers, request.api_key, &env_lookup)?;
 
-    let typed_request = serde_json::from_value(request.body).map_err(|err| {
-        Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+    let typed_request = serde_json::from_value(request.body).map_err(|error| {
+        Error::prepare_with_source(
+            ErrorCode::InvalidRequest,
+            "invalid Anthropic messages request",
+            error,
+        )
     })?;
     let transformed = config.transform_request(typed_request)?;
-    let body = serde_json::to_value(transformed).map_err(|err| {
-        Error::InvalidRequest(format!(
-            "failed to serialize Anthropic messages request: {err}"
-        ))
+    let body = serde_json::to_value(transformed).map_err(|error| {
+        Error::prepare_with_source(
+            ErrorCode::InvalidRequest,
+            "failed to serialize Anthropic messages request",
+            error,
+        )
     })?;
 
     let url = config.complete_url(request.api_base, &model, &env_lookup)?;

@@ -1,117 +1,146 @@
-use litellm_core::error::Error;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use litellm_core::error::{Error, ErrorCode, ProviderState};
 use pyo3::prelude::*;
+use pyo3::types::PyNone;
 
 pyo3::create_exception!(
     _native,
-    RustBridgeDeclined,
+    RustPreparationError,
     pyo3::exceptions::PyException,
-    "The route declined before calling the provider, so the host may retry on its own path."
+    "Rust stopped before provider execution and the host may use another implementation."
 );
 
 pyo3::create_exception!(
     _native,
-    RustUpstreamError,
+    RustExecutionError,
     pyo3::exceptions::PyException,
-    "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
+    "Rust owns provider execution and the host must not retry through another implementation."
 );
 
-pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
-    match err {
-        Error::Auth(message) => PyValueError::new_err(message),
-        Error::InvalidProvider(_)
-        | Error::InvalidRequest(_)
-        | Error::InvalidType { .. }
-        | Error::MissingField(_) => PyValueError::new_err(err.to_string()),
-        other => PyRuntimeError::new_err(other.to_string()),
+pub(crate) fn core_error_to_pyerr(error: Error) -> PyErr {
+    match error {
+        Error::Prepare {
+            code,
+            message,
+            source: _,
+        } => {
+            structured_error::<RustPreparationError>(code, message, None, ProviderState::NotStarted)
+        }
+        Error::Execute {
+            code,
+            message,
+            status_code,
+            provider_state,
+            source: _,
+        } => structured_error::<RustExecutionError>(code, message, status_code, provider_state),
     }
 }
 
-/// Map a core error for a route whose host keeps a Python implementation.
-///
-/// The distinction the host needs is whether the provider was already called.
-/// Everything raised before the request goes out is safe for the host to retry
-/// on its own path; anything after it is not, because the provider has already
-/// done the work and billed for it.
-pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
-    match err {
-        Error::Unsupported(_)
-        | Error::Auth(_)
-        | Error::InvalidProvider(_)
-        | Error::InvalidRequest(_)
-        | Error::InvalidType { .. }
-        | Error::MissingField(_)
-        | Error::Routing(_)
-        // Nothing reached the provider, so serving it on Python cannot double
-        // bill and is the only way the caller gets an answer at all.
-        | Error::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
-        Error::Http { status, body } => {
-            RustUpstreamError::new_err((status, format!("{status}: {body}")))
+fn structured_error<E>(
+    code: ErrorCode,
+    message: String,
+    status_code: Option<u16>,
+    provider_state: ProviderState,
+) -> PyErr
+where
+    E: pyo3::type_object::PyTypeInfo,
+{
+    let error = Python::attach(|py| PyErr::from_type(py.get_type::<E>(), (message.clone(),)));
+    Python::attach(|py| {
+        let value = error.value(py);
+        value
+            .setattr("code", code.as_ref())
+            .expect("exception attributes are writable");
+        value
+            .setattr("message", message)
+            .expect("exception attributes are writable");
+        match status_code {
+            Some(status) => value
+                .setattr("status_code", status)
+                .expect("exception attributes are writable"),
+            None => value
+                .setattr("status_code", PyNone::get(py))
+                .expect("exception attributes are writable"),
         }
-        Error::Network(message) | Error::InvalidResponse(message) => {
-            RustUpstreamError::new_err((0u16, message))
-        }
-    }
+        value
+            .setattr("provider_state", provider_state.as_ref())
+            .expect("exception attributes are writable");
+    });
+    error
 }
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
-    module.add("RustBridgeDeclined", py.get_type::<RustBridgeDeclined>())?;
-    module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
-}
-
-pub(crate) fn ocr_prepare_error_to_pyerr(err: Error) -> PyErr {
-    RustBridgeDeclined::new_err(err.to_string())
-}
-
-pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
-    match err {
-        Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
-        Error::Auth(message) => RustUpstreamError::new_err((401u16, message)),
-        Error::InvalidProvider(_)
-        | Error::InvalidRequest(_)
-        | Error::InvalidType { .. }
-        | Error::MissingField(_)
-        | Error::Unsupported(_) => RustUpstreamError::new_err((400u16, err.to_string())),
-        Error::Routing(message) | Error::Connect(message) => {
-            RustUpstreamError::new_err((500u16, message))
-        }
-        Error::Network(message) | Error::InvalidResponse(message) => {
-            RustUpstreamError::new_err((0u16, message))
-        }
-    }
+    let preparation = py.get_type::<RustPreparationError>();
+    let execution = py.get_type::<RustExecutionError>();
+    module.add("RustPreparationError", &preparation)?;
+    module.add("RustExecutionError", &execution)?;
+    module.add("RustBridgeDeclined", preparation)?;
+    module.add("RustUpstreamError", execution)
 }
 
 #[cfg(test)]
-mod ocr_error_tests {
+mod tests {
     use super::*;
 
     #[test]
-    fn ocr_errors_classify_dispatch_safety() {
+    fn preparation_error_exposes_structured_fields() {
         Python::initialize();
         Python::attach(|py| {
-            let rejected =
-                ocr_prepare_error_to_pyerr(Error::InvalidProvider("unsupported".to_string()));
-            assert!(rejected.is_instance_of::<RustBridgeDeclined>(py));
-            let failed = ocr_error_to_pyerr(Error::InvalidProvider("unsupported".to_string()));
-            assert!(failed.is_instance_of::<RustUpstreamError>(py));
-            let args: (u16, String) = failed
-                .value(py)
-                .getattr("args")
-                .and_then(|args| args.extract())
-                .expect("accepted validation failures remain owned by Rust");
-            assert_eq!(args.0, 400);
-            let mapped = ocr_error_to_pyerr(Error::Http {
-                status: 429,
-                body: r#"{"message":"rate limited"}"#.to_string(),
-            });
-            assert!(mapped.is_instance_of::<RustUpstreamError>(py));
-            let args: (u16, String) = mapped
-                .value(py)
-                .getattr("args")
-                .and_then(|args| args.extract())
-                .expect("OCR failures retain status and unprefixed provider message");
-            assert_eq!(args, (429, r#"{"message":"rate limited"}"#.to_string()));
+            let mapped = core_error_to_pyerr(Error::prepare(
+                ErrorCode::InvalidRequest,
+                "invalid document",
+            ));
+            assert!(mapped.is_instance_of::<RustPreparationError>(py));
+            let value = mapped.value(py);
+            assert_eq!(
+                value
+                    .getattr("code")
+                    .and_then(|item| item.extract::<String>())
+                    .expect("code is a string"),
+                "invalid_request"
+            );
+            assert_eq!(
+                value
+                    .getattr("provider_state")
+                    .and_then(|item| item.extract::<String>())
+                    .expect("provider state is a string"),
+                "not_started"
+            );
+            assert!(
+                value
+                    .getattr("status_code")
+                    .expect("field exists")
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn execution_error_preserves_ownership_fields() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mapped = core_error_to_pyerr(Error::execute(
+                ErrorCode::Upstream,
+                "rate limited",
+                Some(429),
+                ProviderState::ResponseReceived,
+            ));
+            assert!(mapped.is_instance_of::<RustExecutionError>(py));
+            let value = mapped.value(py);
+            assert_eq!(
+                value
+                    .getattr("status_code")
+                    .and_then(|item| item.extract::<u16>())
+                    .expect("status is an integer"),
+                429
+            );
+            assert_eq!(
+                value
+                    .getattr("provider_state")
+                    .and_then(|item| item.extract::<String>())
+                    .expect("provider state is a string"),
+                "response_received"
+            );
         });
     }
 }

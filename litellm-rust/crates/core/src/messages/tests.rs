@@ -4,8 +4,6 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::error::Error;
-
 use super::common_utils::{
     has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
 };
@@ -77,7 +75,7 @@ fn truncate_error_body_caps_long_payloads() {
 fn string_headers_rejects_non_string_values() {
     let headers = json!({"x-count": 3}).as_object().unwrap().clone();
     let err = string_headers(Some(headers)).expect_err("non-string header rejected");
-    assert!(matches!(err, Error::InvalidRequest(_)));
+    assert!(err.is_prepare() && err.code() == crate::error::ErrorCode::InvalidRequest);
 }
 
 #[test]
@@ -341,7 +339,7 @@ async fn messages_requires_auth_when_no_key_and_no_header() {
     .await
     .expect_err("missing auth errors");
 
-    assert!(matches!(err, Error::Auth(_)));
+    assert!(err.is_prepare() && err.code() == crate::error::ErrorCode::Authentication);
 }
 
 #[tokio::test]
@@ -420,7 +418,11 @@ async fn messages_maps_provider_error_status_to_http_error() {
     .await
     .expect_err("provider error propagates");
 
-    assert!(matches!(err, Error::Http { status: 401, .. }));
+    assert!(
+        !err.is_prepare()
+            && err.code() == crate::error::ErrorCode::Upstream
+            && err.status_code() == Some(401)
+    );
 }
 
 #[tokio::test]
@@ -437,5 +439,7 @@ async fn messages_rejects_unsupported_provider() {
     .await
     .expect_err("unsupported provider errors");
 
-    assert!(matches!(err, Error::InvalidProvider(provider) if provider == "openai"));
+    assert!(err.is_prepare());
+    assert_eq!(err.code(), crate::error::ErrorCode::Unsupported);
+    assert!(err.message().contains("openai"));
 }

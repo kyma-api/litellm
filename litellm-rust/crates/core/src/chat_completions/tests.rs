@@ -202,7 +202,7 @@ fn declines_an_unsupported_request_before_resolving_credentials() {
     call.api_key = None;
     // No api_key is set and no env is consulted: the gate must run first, so the
     // error is the decline rather than a missing-credential error.
-    assert_eq!(decline(call), Error::Unsupported("streaming"));
+    assert_eq!(decline(call), Error::unsupported("streaming"));
 }
 
 #[test]
@@ -214,21 +214,20 @@ fn rejects_an_unknown_provider() {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         )),
-        Error::InvalidProvider("openai".to_string())
+        Error::invalid_provider("openai".to_string())
     );
 }
 
 #[test]
 fn rejects_a_model_with_no_resolvable_provider() {
-    assert!(matches!(
-        decline(request(
-            "claude-sonnet-4-5",
-            None,
-            json!([{"role": "user", "content": "hi"}]),
-            json!({}),
-        )),
-        Error::InvalidProvider(_)
+    let error = decline(request(
+        "claude-sonnet-4-5",
+        None,
+        json!([{"role": "user", "content": "hi"}]),
+        json!({}),
     ));
+    assert!(error.is_prepare());
+    assert_eq!(error.code(), crate::error::ErrorCode::Unsupported);
 }
 
 #[test]
@@ -240,17 +239,16 @@ fn rejects_an_empty_or_malformed_message_list() {
             json!([]),
             json!({}),
         )),
-        Error::InvalidRequest("chat completions requires at least one message".to_string())
+        Error::invalid_request("chat completions requires at least one message".to_string())
     );
-    assert!(matches!(
-        decline(request(
-            "anthropic/claude-sonnet-4-5",
-            None,
-            json!("not a list"),
-            json!({}),
-        )),
-        Error::InvalidRequest(_)
+    let malformed = decline(request(
+        "anthropic/claude-sonnet-4-5",
+        None,
+        json!("not a list"),
+        json!({}),
     ));
+    assert!(malformed.is_prepare());
+    assert_eq!(malformed.code(), crate::error::ErrorCode::InvalidRequest);
 }
 
 #[test]
@@ -264,7 +262,7 @@ fn rejects_non_string_extra_headers() {
     call.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
     assert_eq!(
         decline(call),
-        Error::InvalidRequest(
+        Error::invalid_request(
             "chat completions extra_headers.x-trace must be a string, got number".to_string()
         )
     );
@@ -380,7 +378,7 @@ async fn a_forwarded_header_the_signer_computes_declines_to_python() {
             .await
             .expect_err("{forwarded} should decline instead of being signed");
         assert!(
-            matches!(error, Error::Unsupported(_)),
+            error.is_prepare() && error.code() == crate::error::ErrorCode::Unsupported,
             "{forwarded} declined as {error:?}, which the host would not fall back on"
         );
     }
@@ -733,7 +731,7 @@ mod round_trip {
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
         assert!(
-            matches!(err, Error::InvalidResponse(_)),
+            !err.is_prepare() && err.code() == crate::error::ErrorCode::InvalidResponse,
             "expected a post-send error, got {err:?}"
         );
     }
@@ -751,7 +749,7 @@ mod round_trip {
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
         assert!(
-            matches!(err, Error::InvalidResponse(_)),
+            !err.is_prepare() && err.code() == crate::error::ErrorCode::InvalidResponse,
             "expected a post-send error, got {err:?}"
         );
     }
@@ -769,7 +767,9 @@ mod round_trip {
         .expect_err("upstream rejects");
         handle.await.expect("server task");
         assert!(
-            matches!(err, Error::Http { status: 429, .. }),
+            !err.is_prepare()
+                && err.code() == crate::error::ErrorCode::Upstream
+                && err.status_code() == Some(429),
             "expected a 429, got {err:?}"
         );
     }
@@ -793,34 +793,10 @@ mod round_trip {
         .await
         .expect_err("nothing is listening");
         assert!(
-            matches!(err, Error::Connect(_)),
+            !err.is_prepare()
+                && err.code() == crate::error::ErrorCode::Transport
+                && err.provider_state() == crate::error::ProviderState::NotStarted,
             "expected a pre-send connect failure, got {err:?}"
         );
-    }
-
-    #[test]
-    fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
-        use crate::chat_completions::handler::as_response_error;
-
-        for original in [
-            Error::MissingField("usage"),
-            Error::Unsupported("non-text response content block"),
-            Error::InvalidRequest("whatever".to_string()),
-            Error::Auth("whatever".to_string()),
-        ] {
-            let label = format!("{original:?}");
-            assert!(
-                matches!(as_response_error(original), Error::InvalidResponse(_)),
-                "{label} must not stay retryable once the provider has answered"
-            );
-        }
-        // An upstream status is already unambiguous, so it survives intact.
-        assert!(matches!(
-            as_response_error(Error::Http {
-                status: 500,
-                body: "boom".to_string()
-            }),
-            Error::Http { status: 500, .. }
-        ));
     }
 }

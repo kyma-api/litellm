@@ -1,5 +1,5 @@
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use litellm_core::error::Error;
+use litellm_core::error::{Error, ErrorCode};
 use litellm_core::providers::reducto::ocr::transformation::{
     build_upload_request, extract_document_source, extract_upload_file_id,
 };
@@ -72,14 +72,6 @@ impl OcrLifecycleHooks {
             optional_params,
             ..request
         })
-    }
-
-    pub(super) async fn prepare_for_dispatch(
-        &self,
-        request: PreparedOcrRequest,
-    ) -> Result<ProviderOcrRequest, Error> {
-        let request = self.run_pre_call_guardrails(request).await?;
-        self.prepare_provider_request(request).await
     }
 
     pub(crate) async fn prepare_provider_request(
@@ -206,7 +198,7 @@ async fn upload_reducto_document(
         .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
         .map(|(_, value)| value.as_str())
     else {
-        return Err(Error::Auth(
+        return Err(Error::authentication(
             "Reducto upload requires an Authorization header".to_string(),
         ));
     };
@@ -216,7 +208,7 @@ async fn upload_reducto_document(
     let part = reqwest::multipart::Part::bytes(upload.bytes)
         .file_name(upload.file_name)
         .mime_str(&upload.mime_type)
-        .map_err(|error| Error::InvalidRequest(error.to_string()))?;
+        .map_err(|error| Error::invalid_request(error.to_string()))?;
     let form = reqwest::multipart::Form::new().part("file", part);
     let mut request_builder = http_client().post(upload.url).multipart(form);
     for (name, value) in upstream_headers {
@@ -232,20 +224,17 @@ async fn upload_reducto_document(
     let response = request_builder
         .send()
         .await
-        .map_err(|error| Error::Network(error.to_string()))?;
+        .map_err(|error| Error::transport(error.to_string()))?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|error| Error::Network(error.to_string()))?;
+        .map_err(|error| Error::transport(error.to_string()))?;
     if !status.is_success() {
-        return Err(Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&body),
-        });
+        return Err(Error::upstream(status.as_u16(), truncate_error_body(&body)));
     }
     let response_json: Value = serde_json::from_str(&body).map_err(|error| {
-        Error::InvalidResponse(format!("invalid Reducto upload response JSON: {error}"))
+        Error::invalid_response(format!("invalid Reducto upload response JSON: {error}"))
     })?;
     let file_id = extract_upload_file_id(&response_json)?;
     Ok(json!({"type": "document_url", "document_url": file_id}))
@@ -347,17 +336,17 @@ fn parse_ocr_pre_call_guardrail_request(
     request: GuardrailRequest,
 ) -> Result<(Value, Map<String, Value>), Error> {
     let Value::Object(mut data) = request.data else {
-        return Err(Error::InvalidRequest(
+        return Err(Error::invalid_request(
             "OCR pre_call guardrail must return an object".to_string(),
         ));
     };
     let document = data.remove("document").ok_or_else(|| {
-        Error::InvalidRequest("OCR pre_call guardrail removed document".to_string())
+        Error::invalid_request("OCR pre_call guardrail removed document".to_string())
     })?;
     let optional_params = match data.remove("optional_params") {
         Some(Value::Object(params)) => params,
         Some(_) => {
-            return Err(Error::InvalidRequest(
+            return Err(Error::invalid_request(
                 "OCR pre_call guardrail optional_params must be an object".to_string(),
             ));
         }
@@ -368,30 +357,28 @@ fn parse_ocr_pre_call_guardrail_request(
 
 fn parse_ocr_during_call_guardrail_request(request: GuardrailRequest) -> Result<Value, Error> {
     let Value::Object(mut data) = request.data else {
-        return Err(Error::InvalidRequest(
+        return Err(Error::invalid_request(
             "OCR during_call guardrail must return an object".to_string(),
         ));
     };
     data.remove("body")
-        .ok_or_else(|| Error::InvalidRequest("OCR during_call guardrail removed body".to_string()))
+        .ok_or_else(|| Error::invalid_request("OCR during_call guardrail removed body".to_string()))
 }
 
 fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
-    Error::InvalidRequest(format!("{}: {}", error.kind, error.message))
+    Error::invalid_request(format!("{}: {}", error.kind, error.message))
 }
 
 fn core_error_kind(error: &Error) -> &'static str {
-    match error {
-        Error::Auth(_) => "AuthError",
-        Error::InvalidProvider(_) => "InvalidProvider",
-        Error::InvalidRequest(_) => "InvalidRequest",
-        Error::InvalidType { .. } => "InvalidType",
-        Error::MissingField(_) => "MissingField",
-        Error::Http { .. } => "HttpError",
-        Error::InvalidResponse(_) => "InvalidResponse",
-        Error::Network(_) => "NetworkError",
-        Error::Connect(_) => "ConnectError",
-        Error::Routing(_) => "RoutingError",
-        Error::Unsupported(_) => "UnsupportedRequest",
+    match error.code() {
+        ErrorCode::Authentication => "AuthError",
+        ErrorCode::Unsupported => "UnsupportedRequest",
+        ErrorCode::InvalidRequest => "InvalidRequest",
+        ErrorCode::Routing => "RoutingError",
+        ErrorCode::Policy => "PolicyError",
+        ErrorCode::Transport => "NetworkError",
+        ErrorCode::Upstream => "HttpError",
+        ErrorCode::InvalidResponse => "InvalidResponse",
+        ErrorCode::Internal => "InternalError",
     }
 }

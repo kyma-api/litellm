@@ -57,7 +57,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|key| !key.trim().is_empty())
         })
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::authentication(MISSING_KEY_MESSAGE.to_string()))
 }
 
 /// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.
@@ -75,18 +75,18 @@ pub(crate) async fn dial_upstream(
     let mut request = url
         .as_str()
         .into_client_request()
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(|err| Error::transport(err.to_string()))?;
     // GA realtime: only Authorization. The legacy OpenAI-Beta header triggers
     // beta_api_shape_disabled, so we do not send it.
     request.headers_mut().insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .map_err(|err| Error::Auth(err.to_string()))?,
+            .map_err(|err| Error::authentication(err.to_string()))?,
     );
 
     let (upstream, _response) = connect_async(request)
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(|err| Error::transport(err.to_string()))?;
     Ok(upstream)
 }
 
@@ -100,17 +100,17 @@ pub(crate) async fn read_event(upstream_rx: &mut UpstreamRx) -> Result<RealtimeE
         let message = upstream_rx
             .next()
             .await
-            .ok_or_else(|| Error::Network("upstream closed before first event".to_string()))?
-            .map_err(|err| Error::Network(err.to_string()))?;
+            .ok_or_else(|| Error::transport("upstream closed before first event".to_string()))?
+            .map_err(|err| Error::transport(err.to_string()))?;
         match message {
             Message::Text(text) => {
                 return serde_json::from_str(&text)
-                    .map_err(|err| Error::InvalidResponse(err.to_string()));
+                    .map_err(|err| Error::invalid_response(err.to_string()));
             }
             // Ignore protocol frames (ping/pong) while waiting for the first event.
             Message::Ping(_) | Message::Pong(_) => continue,
             Message::Close(_) => {
-                return Err(Error::Network(
+                return Err(Error::transport(
                     "upstream closed before first event".to_string(),
                 ));
             }
@@ -153,7 +153,7 @@ where
             client_out
                 .send(outbound)
                 .await
-                .map_err(|err| Error::Network(err.to_string()))?;
+                .map_err(|err| Error::transport(err.to_string()))?;
         }
     }
 
@@ -174,26 +174,26 @@ where
                 // inflate its own spend log. Logging observes upstream events only.
                 for outbound in config.transform_realtime_request(&event, model)?.events {
                     let payload = serde_json::to_string(&outbound)
-                        .map_err(|err| Error::InvalidResponse(err.to_string()))?;
+                        .map_err(|err| Error::invalid_response(err.to_string()))?;
                     upstream_tx
                         .send(Message::Text(payload))
                         .await
-                        .map_err(|err| Error::Network(err.to_string()))?;
+                        .map_err(|err| Error::transport(err.to_string()))?;
                 }
             }
             // upstream -> client
             upstream_message = upstream_rx.next() => {
                 let Some(message) = upstream_message else { break }; // upstream closed
-                match message.map_err(|err| Error::Network(err.to_string()))? {
+                match message.map_err(|err| Error::transport(err.to_string()))? {
                     Message::Text(text) => {
                         let event: RealtimeEvent = serde_json::from_str(&text)
-                            .map_err(|err| Error::InvalidResponse(err.to_string()))?;
+                            .map_err(|err| Error::invalid_response(err.to_string()))?;
                         observe(&event);
                         for outbound in config.transform_realtime_response(&event, model)?.events {
                             client_out
                                 .send(outbound)
                                 .await
-                                .map_err(|err| Error::Network(err.to_string()))?;
+                                .map_err(|err| Error::transport(err.to_string()))?;
                         }
                     }
                     Message::Close(_) => break,

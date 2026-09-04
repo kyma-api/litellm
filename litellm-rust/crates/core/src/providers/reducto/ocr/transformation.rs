@@ -77,21 +77,20 @@ pub fn resolve_api_key(
                 .map(|key| key.trim().to_string())
                 .filter(|key| !key.is_empty())
         })
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::authentication(MISSING_KEY_MESSAGE.to_string()))
 }
 
 pub fn extract_document_source(document: &Value) -> Result<ReductoDocumentSource, Error> {
-    let document = document.as_object().ok_or_else(|| Error::InvalidType {
-        expected: "object",
-        actual: json_type_name(document),
-    })?;
+    let document = document
+        .as_object()
+        .ok_or_else(|| Error::invalid_type("object", json_type_name(document)))?;
     let source = document
         .get("document_url")
         .and_then(Value::as_str)
         .filter(|source| !source.is_empty())
         .or_else(|| document.get("image_url").and_then(Value::as_str))
         .ok_or_else(|| {
-            Error::InvalidRequest(
+            Error::invalid_request(
                 "Reducto expected OCR preprocessing to produce document_url or image_url"
                     .to_string(),
             )
@@ -104,13 +103,13 @@ pub fn classify_document_source(source: &str) -> Result<ReductoDocumentSource, E
         return Ok(ReductoDocumentSource::FileId(source.to_string()));
     }
     if source.starts_with("http://") || source.starts_with("https://") {
-        return Err(Error::InvalidRequest(
+        return Err(Error::invalid_request(
             "Reducto requires type='file' (auto-uploaded) or a reducto:// id. Plain http(s) URLs are not supported; upload the file first."
                 .to_string(),
         ));
     }
     if !source.starts_with("data:") {
-        return Err(Error::InvalidRequest(
+        return Err(Error::invalid_request(
             "Reducto requires a reducto:// id or a base64 data URI after OCR preprocessing."
                 .to_string(),
         ));
@@ -118,9 +117,9 @@ pub fn classify_document_source(source: &str) -> Result<ReductoDocumentSource, E
 
     let (header, encoded) = source
         .split_once(',')
-        .ok_or_else(|| Error::InvalidRequest("Invalid Reducto data URI provided.".to_string()))?;
+        .ok_or_else(|| Error::invalid_request("Invalid Reducto data URI provided.".to_string()))?;
     if !header.split(';').any(|part| part == "base64") {
-        return Err(Error::InvalidRequest(
+        return Err(Error::invalid_request(
             "Reducto only supports base64-encoded data URIs.".to_string(),
         ));
     }
@@ -132,7 +131,7 @@ pub fn classify_document_source(source: &str) -> Result<ReductoDocumentSource, E
         .unwrap_or("application/octet-stream")
         .to_string();
     let bytes = BASE64_STANDARD.decode(encoded).map_err(|_| {
-        Error::InvalidRequest("Invalid Reducto base64 payload provided.".to_string())
+        Error::invalid_request("Invalid Reducto base64 payload provided.".to_string())
     })?;
 
     Ok(ReductoDocumentSource::Upload { bytes, mime_type })
@@ -163,7 +162,7 @@ pub fn extract_upload_file_id(response_json: &Value) -> Result<&str, Error> {
         .and_then(Value::as_str)
         .filter(|file_id| !file_id.is_empty())
         .ok_or_else(|| {
-            Error::InvalidResponse(format!(
+            Error::invalid_response(format!(
                 "Reducto /upload returned 200 without a file_id; got payload={response_json}"
             ))
         })
@@ -211,7 +210,7 @@ pub fn build_parse_legacy_request(
 fn source_file_id(document: &Value) -> Result<String, Error> {
     match extract_document_source(document)? {
         ReductoDocumentSource::FileId(file_id) => Ok(file_id),
-        ReductoDocumentSource::Upload { .. } => Err(Error::Unsupported(DATA_URI_UPLOAD_REQUIRED)),
+        ReductoDocumentSource::Upload { .. } => Err(Error::unsupported(DATA_URI_UPLOAD_REQUIRED)),
     }
 }
 
@@ -286,16 +285,13 @@ pub fn transform_reducto_response(
 ) -> Result<OcrResponseData, Error> {
     let response = response_json
         .as_object()
-        .ok_or_else(|| Error::InvalidType {
-            expected: "object",
-            actual: json_type_name(&response_json),
-        })?;
+        .ok_or_else(|| Error::invalid_response_type("object", json_type_name(&response_json)))?;
     let empty_result = Map::new();
     let result = match response.get("result") {
         Some(Value::Object(result)) => result,
         Some(Value::Null) => &empty_result,
         Some(_) => {
-            return Err(Error::InvalidResponse(
+            return Err(Error::invalid_response(
                 "Reducto result must be an object".to_string(),
             ));
         }

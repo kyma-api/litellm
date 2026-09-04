@@ -33,7 +33,7 @@ pub fn resolve_azure_api_key(
         .map(str::to_string)
         .or_else(|| env_lookup(AZURE_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            Error::Auth(
+            Error::authentication(
                 "Missing Azure API Key - Set `api_key` or the AZURE_API_KEY environment variable"
                     .to_string(),
             )
@@ -48,7 +48,7 @@ pub fn complete_azure_anthropic_url(
         .map(str::to_string)
         .or_else(|| env_lookup(AZURE_API_BASE_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            Error::Auth(
+            Error::authentication(
                 "Missing Azure API Base - Set `api_base` or the AZURE_API_BASE environment variable. \
                  Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
                     .to_string(),
@@ -269,7 +269,7 @@ mod tests {
             "https://env.services.ai.azure.com/anthropic/v1/messages"
         );
         let err = complete_azure_anthropic_url(Some("  "), &|_| None).expect_err("missing base");
-        assert!(matches!(err, Error::Auth(_)));
+        assert!(err.is_prepare() && err.code() == crate::error::ErrorCode::Authentication);
     }
 
     #[test]
@@ -283,10 +283,9 @@ mod tests {
             resolve_azure_api_key(Some("  "), &with_env).unwrap(),
             "sk-env"
         );
-        assert!(matches!(
-            resolve_azure_api_key(None, &|_| None).expect_err("missing key"),
-            Error::Auth(_)
-        ));
+        let error = resolve_azure_api_key(None, &|_| None).expect_err("missing key");
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), crate::error::ErrorCode::Authentication);
     }
 
     #[test]

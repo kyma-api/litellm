@@ -46,7 +46,7 @@ pub async fn messages_request(
         .header(AUTHORIZATION, "Bearer trace-master-key")
         .header(CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
-        .map_err(|error| Error::InvalidRequest(error.to_string()))?;
+        .map_err(|error| Error::invalid_request(error.to_string()))?;
     let response = routes::app(state)
         .oneshot(request)
         .await
@@ -54,9 +54,9 @@ pub async fn messages_request(
     let status: StatusCode = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
-        .map_err(|error| Error::InvalidResponse(error.to_string()))?;
+        .map_err(|error| Error::invalid_response(error.to_string()))?;
     let body = serde_json::from_slice(&bytes).map_err(|error| {
-        Error::InvalidResponse(format!("gateway returned invalid JSON: {error}"))
+        Error::invalid_response(format!("gateway returned invalid JSON: {error}"))
     })?;
     Ok(GatewayResponse {
         status: status.as_u16(),

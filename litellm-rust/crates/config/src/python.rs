@@ -11,14 +11,14 @@ pub fn load_model_list(config_path: &Path) -> Result<Vec<Deployment>, Error> {
             .import("litellm.proxy.read_model_list")
             .and_then(|module| module.getattr("read_model_list"))
             .and_then(|reader| reader.call1((config_path.to_string_lossy().as_ref(),)))
-            .map_err(|error| Error::PythonLoading(error.to_string()))?;
+            .map_err(Error::PythonLoading)?;
 
         let model_list_json = python
             .import("json")
             .and_then(|json| json.getattr("dumps"))
             .and_then(|dumps| dumps.call1((model_list,)))
             .and_then(|encoded| encoded.extract::<String>())
-            .map_err(|error| Error::Serialization(error.to_string()))?;
+            .map_err(Error::Serialization)?;
 
         parse_model_list(&model_list_json)
     })

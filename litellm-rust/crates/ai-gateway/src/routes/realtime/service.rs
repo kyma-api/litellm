@@ -36,7 +36,7 @@ where
 {
     let deployment = router
         .get_available_deployment(model)
-        .ok_or_else(|| Error::Routing(format!("no deployment available for model '{model}'")))?;
+        .ok_or_else(|| Error::routing(format!("no deployment available for model '{model}'")))?;
     let params = &deployment.litellm_params;
     // Strip a leading `openai/` so the OpenAI-only realtime fn gets the bare model.
     let provider_model = params

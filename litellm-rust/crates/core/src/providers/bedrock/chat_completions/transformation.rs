@@ -228,14 +228,14 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         let body = response
             .body
             .as_object()
-            .ok_or_else(|| Error::InvalidResponse("converse response is not an object".into()))?;
+            .ok_or_else(|| Error::invalid_response("converse response is not an object".into()))?;
 
         let content = body
             .get("output")
             .and_then(|output| output.get("message"))
             .and_then(|message| message.get("content"))
             .and_then(Value::as_array)
-            .ok_or(Error::MissingField("output.message.content"))?;
+            .ok_or(Error::missing_response_field("output.message.content"))?;
         // The route declines tool requests, so anything other than a text block
         // is something this path never asked for. Decline; the host falls back.
         if content.iter().any(|block| {
@@ -243,7 +243,9 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
                 .as_object()
                 .is_none_or(|block| block.len() != 1 || !block.contains_key("text"))
         }) {
-            return Err(Error::Unsupported("non-text response content block"));
+            return Err(Error::unsupported_response(
+                "non-text response content block",
+            ));
         }
         let text: String = content
             .iter()
@@ -253,7 +255,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         let usage = body
             .get("usage")
             .and_then(Value::as_object)
-            .ok_or(Error::MissingField("usage"))?;
+            .ok_or(Error::missing_response_field("usage"))?;
         let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
         let computed = usage_from_parts(
             field("inputTokens"),

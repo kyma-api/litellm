@@ -47,7 +47,7 @@ pub fn complete_url(api_base: Option<&str>) -> String {
 
 /// Resolve the Mistral API key from the explicit param or the environment.
 ///
-/// Blank/whitespace values are treated as absent. Returns `Error::Auth`
+/// Blank/whitespace values are treated as absent. Returns `Error::authentication`
 /// when no usable key is available.
 ///
 /// Note: the env fallback only reads the process environment. Secret-manager
@@ -62,7 +62,7 @@ pub fn resolve_api_key(
         .filter(|key| !key.is_empty())
         .map(str::to_string)
         .or_else(|| env_lookup(MISTRAL_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::authentication(MISSING_KEY_MESSAGE.to_string()))
 }
 
 pub struct MistralOcrConfig;
@@ -83,10 +83,7 @@ impl OcrProviderConfig for MistralOcrConfig {
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
         if !document.is_object() {
-            return Err(Error::InvalidType {
-                expected: "object",
-                actual: json_type_name(&document),
-            });
+            return Err(Error::invalid_type("object", json_type_name(&document)));
         }
 
         let mut data = Map::new();
@@ -108,12 +105,9 @@ impl OcrProviderConfig for MistralOcrConfig {
         model: &str,
         response_json: Value,
     ) -> Result<OcrResponseData, Error> {
-        let response_object = response_json
-            .as_object()
-            .ok_or_else(|| Error::InvalidType {
-                expected: "object",
-                actual: json_type_name(&response_json),
-            })?;
+        let response_object = response_json.as_object().ok_or_else(|| {
+            Error::invalid_response_type("object", json_type_name(&response_json))
+        })?;
 
         let pages = response_object
             .get("pages")
@@ -369,13 +363,7 @@ mod tests {
         let err = transform_ocr_request("mistral-ocr-latest", json!("bad"), Map::new())
             .expect_err("string document should be rejected");
 
-        assert_eq!(
-            err,
-            Error::InvalidType {
-                expected: "object",
-                actual: "string",
-            }
-        );
+        assert_eq!(err, Error::invalid_type("object", "string"));
     }
 
     #[test]
@@ -428,6 +416,6 @@ mod tests {
     #[test]
     fn resolve_api_key_errors_when_absent() {
         let err = resolve_api_key(None, &|_| None).expect_err("missing key should error");
-        assert_eq!(err, Error::Auth(MISSING_KEY_MESSAGE.to_string()));
+        assert_eq!(err, Error::authentication(MISSING_KEY_MESSAGE.to_string()));
     }
 }

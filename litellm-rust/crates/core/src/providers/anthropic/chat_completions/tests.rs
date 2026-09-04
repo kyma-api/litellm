@@ -391,26 +391,29 @@ fn declines_a_response_carrying_a_non_text_block() {
         "usage": {"input_tokens": 1, "output_tokens": 1}
     }))
     .expect_err("non-text block");
-    assert_eq!(err, Error::Unsupported("non-text response content block"));
+    assert_eq!(
+        err,
+        Error::unsupported_response("non-text response content block")
+    );
 }
 
 #[test]
 fn errors_on_a_response_missing_required_fields() {
     assert_eq!(
         transform_response(json!("nope")).expect_err("not an object"),
-        Error::InvalidResponse("messages response is not an object".to_string())
+        Error::invalid_response("messages response is not an object".to_string())
     );
     assert_eq!(
         transform_response(json!({"model": "m", "usage": {}})).expect_err("no content"),
-        Error::MissingField("content")
+        Error::missing_response_field("content")
     );
     assert_eq!(
         transform_response(json!({"model": "m", "content": []})).expect_err("no usage"),
-        Error::MissingField("usage")
+        Error::missing_response_field("usage")
     );
     assert_eq!(
         transform_response(json!({"content": [], "usage": {}})).expect_err("no model"),
-        Error::MissingField("model")
+        Error::missing_response_field("model")
     );
 }
 

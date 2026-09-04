@@ -25,6 +25,10 @@ pub(super) struct ProviderMessagesRequest {
     pub(super) timeout: Option<Duration>,
 }
 
+pub struct PreparedMessages {
+    pub(super) request: ProviderMessagesRequest,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SystemPrompt {

@@ -16,11 +16,25 @@ pub mod transformation;
 pub mod types;
 
 use handler::{execute_messages_provider_call, execute_messages_provider_stream};
+use prepare::prepare_provider_request;
+pub use types::PreparedMessages;
 use types::{AnthropicMessagesResponse, MessagesRequest};
+
+pub fn prepare(request: MessagesRequest<'_>) -> Result<PreparedMessages, Error> {
+    Ok(PreparedMessages {
+        request: prepare_provider_request(request)?,
+    })
+}
+
+pub async fn execute(prepared: PreparedMessages) -> Result<AnthropicMessagesResponse, Error> {
+    execute_messages_provider_call(prepared)
+        .await
+        .map_err(Error::after_ownership_transfer)
+}
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
-    execute_messages_provider_call(request).await
+    execute(prepare(request)?).await
 }
 
 pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Response, Error> {

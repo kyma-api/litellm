@@ -325,7 +325,7 @@ mod tests {
         Python::attach(|py| {
             let error = run_sync::<bool, _>(
                 py,
-                async { Err(Error::InvalidRequest("invalid".to_string())) },
+                async { Err(Error::invalid_request("invalid".to_string())) },
                 panicking_error_mapper,
             )
             .expect_err("panicked mapper should become a Python exception");

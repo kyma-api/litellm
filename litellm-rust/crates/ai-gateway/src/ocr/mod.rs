@@ -12,10 +12,9 @@ pub use types::OcrRequest;
 
 use handler::execute_ocr_provider_call;
 use prepare::{PreparedOcrCall, prepare_ocr_call};
-use types::ProviderOcrRequest;
-
 pub struct PreparedOcrDispatch {
-    request: ProviderOcrRequest,
+    request: types::PreparedOcrRequest,
+    hooks: hooks::OcrLifecycleHooks,
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -28,12 +27,17 @@ pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
 
 pub async fn prepare_ocr_dispatch(request: OcrRequest<'_>) -> Result<PreparedOcrDispatch, Error> {
     let PreparedOcrCall { request, hooks } = prepare_ocr_call(request);
-    let request = hooks.prepare_for_dispatch(request).await?;
-    Ok(PreparedOcrDispatch { request })
+    if let Err(error) = &request.config {
+        return Err(Error::prepare(error.code(), error.message()));
+    }
+    Ok(PreparedOcrDispatch { request, hooks })
 }
 
 pub async fn execute_ocr_dispatch(prepared: PreparedOcrDispatch) -> Result<Value, Error> {
-    execute_ocr_provider_call(prepared.request).await
+    CallLifecycle::default()
+        .run_request(prepared.request, &prepared.hooks, execute_ocr_provider_call)
+        .await
+        .map_err(Error::after_ownership_transfer)
 }
 
 #[cfg(test)]
@@ -42,7 +46,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
-    use super::{Error, OcrRequest, execute_ocr_dispatch, ocr, prepare_ocr_dispatch};
+    use super::{OcrRequest, execute_ocr_dispatch, ocr, prepare_ocr_dispatch};
     use crate::integrations::types::RequestMetadata;
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
@@ -141,12 +145,48 @@ mod tests {
             .await
             .expect_err("provider error is returned");
 
-        assert!(matches!(error, Error::Http { status: 429, .. }));
+        assert_eq!(error.code(), litellm_core::ErrorCode::Upstream);
+        assert_eq!(error.status_code(), Some(429));
         assert!(
             server
                 .await
                 .expect("server task completes")
                 .contains("POST /v1/ocr")
+        );
+    }
+
+    #[tokio::test]
+    async fn reducto_upload_starts_only_after_ownership_transfer() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("test listener binds");
+        listener
+            .set_nonblocking(true)
+            .expect("test listener becomes nonblocking");
+        let api_base = format!(
+            "http://{}",
+            listener.local_addr().expect("listener has address")
+        );
+        let mut request = base_ocr_request("reducto/parse-v3");
+        request.api_base = Some(&api_base);
+        request.api_key = None;
+        request.extra_headers = Some(Map::from_iter([(
+            "Authorization".to_string(),
+            json!("Bearer test-key"),
+        )]));
+        request.document = json!({
+            "type": "document_url",
+            "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
+        });
+
+        let _prepared = prepare_ocr_dispatch(request)
+            .await
+            .expect("request preparation succeeds");
+
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("preparation must not upload")
+                .kind(),
+            std::io::ErrorKind::WouldBlock
         );
     }
 

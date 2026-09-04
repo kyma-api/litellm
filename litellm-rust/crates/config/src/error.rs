@@ -2,10 +2,12 @@ use thiserror::Error as ThisError;
 
 #[derive(Debug, ThisError)]
 pub enum Error {
-    #[error("read_model_list failed: {0}")]
-    PythonLoading(String),
-    #[error("serializing model_list failed: {0}")]
-    Serialization(String),
-    #[error("parsing model_list failed: {0}")]
+    #[cfg(feature = "python")]
+    #[error("read_model_list failed")]
+    PythonLoading(#[source] pyo3::PyErr),
+    #[cfg(feature = "python")]
+    #[error("serializing model_list failed")]
+    Serialization(#[source] pyo3::PyErr),
+    #[error("parsing model_list failed")]
     ModelListParsing(#[source] serde_json::Error),
 }

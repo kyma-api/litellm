@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::error::Error;
+use crate::error::{Error, ErrorCode, ProviderState};
 use crate::http_utils::{http_request, truncate_error_body};
 
 use super::client::http_client;
@@ -10,8 +10,13 @@ use super::types::ProviderAudioTranscriptionRequest;
 pub async fn execute_audio_transcription_provider_call(
     request: ProviderAudioTranscriptionRequest,
 ) -> Result<Value, Error> {
-    let body = serde_json::to_vec(&request.body)
-        .map_err(|error| Error::InvalidRequest(format!("invalid audio request body: {error}")))?;
+    let body = serde_json::to_vec(&request.body).map_err(|error| {
+        Error::prepare_with_source(
+            ErrorCode::InvalidRequest,
+            "invalid audio request body",
+            error,
+        )
+    })?;
     let headers = signed_headers(&request, &body).await?;
     let mut request_builder = http_client().post(&request.url).body(body);
     for (key, value) in headers {
@@ -20,22 +25,37 @@ pub async fn execute_audio_transcription_provider_call(
     if let Some(duration) = request.timeout {
         request_builder = request_builder.timeout(duration);
     }
-    let response = http_request(request_builder)
-        .await
-        .map_err(|error| Error::Network(error.to_string()))?;
+    let response = http_request(request_builder).await.map_err(|error| {
+        Error::execute_with_source(
+            ErrorCode::Transport,
+            "audio provider request failed",
+            None,
+            ProviderState::MayHaveStarted,
+            error,
+        )
+    })?;
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|error| Error::Network(error.to_string()))?;
+    let text = response.text().await.map_err(|error| {
+        Error::execute_with_source(
+            ErrorCode::Transport,
+            "reading audio provider response failed",
+            None,
+            ProviderState::ResponseReceived,
+            error,
+        )
+    })?;
     if !status.is_success() {
-        return Err(Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        });
+        return Err(Error::upstream(status.as_u16(), truncate_error_body(&text)));
     }
-    let response_json = serde_json::from_str(&text)
-        .map_err(|error| Error::InvalidResponse(format!("invalid audio response JSON: {error}")))?;
+    let response_json = serde_json::from_str(&text).map_err(|error| {
+        Error::execute_with_source(
+            ErrorCode::InvalidResponse,
+            "invalid audio response JSON",
+            None,
+            ProviderState::ResponseReceived,
+            error,
+        )
+    })?;
     Ok(request
         .config
         .transform_transcription_response(&request.model, response_json)?
@@ -83,7 +103,7 @@ async fn signed_headers(
     use crate::audio_transcription::transformation::AudioTranscriptionAuth;
 
     match request.auth {
-        AudioTranscriptionAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
+        AudioTranscriptionAuth::AwsSigV4 { .. } => Err(Error::unsupported(
             "AWS SigV4 requires the bedrock-auth feature",
         )),
         AudioTranscriptionAuth::Bearer => Ok(request.upstream_headers.clone()),

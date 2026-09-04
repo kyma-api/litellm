@@ -22,7 +22,7 @@ pub fn resolve_anthropic_api_key(
         .map(str::to_string)
         .or_else(|| env_lookup(ANTHROPIC_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            Error::Auth(
+            Error::authentication(
                 "Missing Anthropic API Key - Set `api_key` or the ANTHROPIC_API_KEY \
                  environment variable"
                     .to_string(),
@@ -120,10 +120,9 @@ mod tests {
             resolve_anthropic_api_key(Some("  "), &with_env).unwrap(),
             "sk-env"
         );
-        assert!(matches!(
-            resolve_anthropic_api_key(None, &|_| None).expect_err("missing key"),
-            Error::Auth(_)
-        ));
+        let error = resolve_anthropic_api_key(None, &|_| None).expect_err("missing key");
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), crate::error::ErrorCode::Authentication);
     }
 
     #[test]

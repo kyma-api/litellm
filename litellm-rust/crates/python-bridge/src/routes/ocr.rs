@@ -1,4 +1,5 @@
 use litellm_core::Error;
+use litellm_core::error::json_type_name;
 use std::future::Future;
 
 use litellm_ai_gateway::io::ocr::{
@@ -11,7 +12,7 @@ use pyo3::types::PyAny;
 use serde_json::Value;
 
 use crate::constants::RUST_OCR_PROVIDERS;
-use crate::errors::{ocr_error_to_pyerr, ocr_prepare_error_to_pyerr};
+use crate::errors::core_error_to_pyerr;
 use crate::execution;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
@@ -94,6 +95,9 @@ fn prepare_ocr(
             extra_headers,
             timeout,
         } = options;
+        if !document.is_object() {
+            return Err(Error::invalid_type("object", json_type_name(&document)));
+        }
         run_ocr(OcrRequest {
             model: &model,
             document,
@@ -130,10 +134,13 @@ fn prepare_dispatch(
             extra_headers,
             timeout,
         } = options;
+        if !document.is_object() {
+            return Err(Error::invalid_type("object", json_type_name(&document)));
+        }
         if let Some(reason) =
             ocr_decline_reason(&model, &optional_params, custom_llm_provider.as_deref())
         {
-            return Err(Error::InvalidRequest(reason));
+            return Err(Error::invalid_request(reason));
         }
         let dispatch = prepare_ocr_dispatch(OcrRequest {
             model: &model,
@@ -180,7 +187,7 @@ fn ocr_prepare(
         optional_params,
         timeout_seconds,
     })?;
-    let prepared = execution::run_sync_value(py, future, ocr_prepare_error_to_pyerr)?;
+    let prepared = execution::run_sync_value(py, future, core_error_to_pyerr)?;
     Py::new(py, prepared).map(Py::into_any)
 }
 
@@ -209,7 +216,7 @@ fn aocr_prepare<'py>(
         timeout_seconds,
     })?;
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let prepared = execution::await_value(future, ocr_prepare_error_to_pyerr).await?;
+        let prepared = execution::await_value(future, core_error_to_pyerr).await?;
         Python::attach(|py| Py::new(py, prepared).map(Py::into_any))
     })
 }
@@ -225,13 +232,13 @@ fn take_dispatch(py: Python<'_>, prepared: Py<PreparedOcr>) -> PyResult<Prepared
 #[pyfunction]
 fn ocr_execute(py: Python<'_>, prepared: Py<PreparedOcr>) -> PyResult<Py<PyAny>> {
     let dispatch = take_dispatch(py, prepared)?;
-    execution::run_sync(py, execute_ocr_dispatch(dispatch), ocr_error_to_pyerr)
+    execution::run_sync(py, execute_ocr_dispatch(dispatch), core_error_to_pyerr)
 }
 
 #[pyfunction]
 fn aocr_execute<'py>(py: Python<'py>, prepared: Py<PreparedOcr>) -> PyResult<Bound<'py, PyAny>> {
     let dispatch = take_dispatch(py, prepared)?;
-    execution::run_async(py, execute_ocr_dispatch(dispatch), ocr_error_to_pyerr)
+    execution::run_async(py, execute_ocr_dispatch(dispatch), core_error_to_pyerr)
 }
 
 bridge_route! {
@@ -254,7 +261,7 @@ bridge_route! {
         timeout_seconds: Option<f64>,
     },
     prepare = prepare_ocr,
-    errors = ocr_error_to_pyerr,
+    errors = core_error_to_pyerr,
     extra = [ocr_decline, ocr_prepare, aocr_prepare, ocr_execute, aocr_execute],
 }
 
@@ -304,12 +311,11 @@ mod tests {
         })
         .expect("request should marshal");
 
-        assert!(matches!(
-            future.await,
-            Err(Error::InvalidType {
-                expected: "object",
-                actual: "string"
-            })
-        ));
+        let Err(error) = future.await else {
+            panic!("string document must fail")
+        };
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), litellm_core::ErrorCode::InvalidRequest);
+        assert!(error.message().contains("expected object, got string"));
     }
 }

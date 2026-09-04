@@ -20,7 +20,7 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Re
 
     let response = http_request(request_builder)
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(|err| Error::transport(err.to_string()))?;
 
     let status = response.status();
     if request.config.response_handling() == OcrResponseHandling::AzureDocumentIntelligencePoll
@@ -32,7 +32,7 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Re
             .and_then(|value| value.to_str().ok())
             .map(str::to_string)
             .ok_or_else(|| {
-                Error::InvalidResponse(
+                Error::invalid_response(
                     "Azure Document Intelligence returned 202 but no Operation-Location header found"
                         .to_string(),
                 )
@@ -57,17 +57,14 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Re
     let text = response
         .text()
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(|err| Error::transport(err.to_string()))?;
 
     if !status.is_success() {
-        return Err(Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        });
+        return Err(Error::upstream(status.as_u16(), truncate_error_body(&text)));
     }
 
     let response_json: Value = serde_json::from_str(&text)
-        .map_err(|err| Error::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
+        .map_err(|err| Error::invalid_response(format!("invalid OCR response JSON: {err}")))?;
 
     Ok(request
         .config

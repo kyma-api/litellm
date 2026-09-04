@@ -201,8 +201,12 @@ def _required_reason(result: RustDeclined | RustUnavailable) -> str:
 
 def _failed(error: BaseException) -> RustFailed:
     args: Final[tuple[object, ...]] = error.args
-    status_value: Final = args[0] if args else 0
-    message_value: Final = args[1] if len(args) > 1 else str(error)
+    attribute_status: Final = getattr(error, "status_code", None)
+    attribute_message: Final = getattr(error, "message", None)
+    status_value: Final = attribute_status if isinstance(attribute_status, int) else (args[0] if args else 0)
+    message_value: Final = (
+        attribute_message if isinstance(attribute_message, str) else (args[1] if len(args) > 1 else str(error))
+    )
     status: Final = status_value if isinstance(status_value, int) else 0
     message: Final = message_value if isinstance(message_value, str) else str(message_value)
     return RustFailed(status_code=status, message=message)

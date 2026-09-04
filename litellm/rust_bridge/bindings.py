@@ -45,8 +45,8 @@ def native_exception_types() -> tuple[type[BaseException], type[BaseException]] 
     native: Final = get_native_bridge()
     if native is None:
         return None
-    declined: Final = getattr(native, "RustBridgeDeclined", None)
-    upstream: Final = getattr(native, "RustUpstreamError", None)
+    declined: Final = getattr(native, "RustPreparationError", None) or getattr(native, "RustBridgeDeclined", None)
+    upstream: Final = getattr(native, "RustExecutionError", None) or getattr(native, "RustUpstreamError", None)
     if not isinstance(declined, type) or not isinstance(upstream, type):
         return None
     return declined, upstream

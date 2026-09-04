@@ -34,14 +34,14 @@ where
 {
     let deployment = router
         .get_available_deployment(model)
-        .ok_or_else(|| Error::Routing(format!("no deployment available for model '{model}'")))?;
+        .ok_or_else(|| Error::routing(format!("no deployment available for model '{model}'")))?;
     let params = &deployment.litellm_params;
     let provider_model = params
         .model
         .strip_prefix("openai/")
         .unwrap_or(&params.model);
     if params.model.contains('/') && !params.model.starts_with("openai/") {
-        return Err(Error::InvalidProvider(
+        return Err(Error::invalid_provider(
             "Responses WebSocket route supports OpenAI deployments only".to_string(),
         ));
     }

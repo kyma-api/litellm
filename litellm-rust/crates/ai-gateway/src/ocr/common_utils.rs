@@ -67,7 +67,7 @@ pub(super) fn string_headers(
                 .as_str()
                 .map(|value| (key.clone(), value.to_string()))
                 .ok_or_else(|| {
-                    Error::InvalidRequest(format!(
+                    Error::invalid_request(format!(
                         "OCR extra_headers.{key} must be a string, got {}",
                         litellm_core::error::json_type_name(&value)
                     ))
@@ -135,7 +135,7 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
 }
 
 fn blocked_url_error(url: &Url) -> Error {
-    Error::InvalidRequest(format!(
+    Error::invalid_request(format!(
         "OCR document URL rejected by SSRF protection: {url}"
     ))
 }
@@ -158,7 +158,7 @@ async fn validate_safe_fetch_url(url: &Url) -> Result<(), Error> {
         .ok_or_else(|| blocked_url_error(url))?;
     let addresses = tokio::net::lookup_host((host, port))
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(|err| Error::transport(err.to_string()))?;
     let mut saw_address = false;
     for address in addresses {
         saw_address = true;
@@ -178,19 +178,19 @@ fn redirect_location(response: &reqwest::Response, url: &Url) -> Result<Url, Err
         .get(reqwest::header::LOCATION)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| {
-            Error::InvalidResponse("OCR document redirect missing Location header".to_string())
+            Error::invalid_response("OCR document redirect missing Location header".to_string())
         })?;
     url.join(location)
-        .map_err(|err| Error::InvalidResponse(format!("invalid OCR document redirect: {err}")))
+        .map_err(|err| Error::invalid_response(format!("invalid OCR document redirect: {err}")))
 }
 
 async fn safe_get_document_url(url: &str) -> Result<(Url, reqwest::Response), Error> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(|err| Error::transport(err.to_string()))?;
     let mut current_url = Url::parse(url)
-        .map_err(|err| Error::InvalidRequest(format!("invalid OCR document URL: {err}")))?;
+        .map_err(|err| Error::invalid_request(format!("invalid OCR document URL: {err}")))?;
 
     for _ in 0..MAX_SAFE_FETCH_REDIRECTS {
         validate_safe_fetch_url(&current_url).await?;
@@ -198,28 +198,28 @@ async fn safe_get_document_url(url: &str) -> Result<(Url, reqwest::Response), Er
             .get(current_url.clone())
             .send()
             .await
-            .map_err(|err| Error::Network(err.to_string()))?;
+            .map_err(|err| Error::transport(err.to_string()))?;
         if !response.status().is_redirection() {
             return Ok((current_url, response));
         }
         current_url = redirect_location(&response, &current_url)?;
     }
 
-    Err(Error::InvalidRequest(
+    Err(Error::invalid_request(
         "Too many redirects while fetching OCR document URL".to_string(),
     ))
 }
 
 fn enforce_download_size(content_length: u64, max_bytes: u64, url: &Url) -> Result<(), Error> {
     if max_bytes == 0 {
-        return Err(Error::InvalidRequest(format!(
+        return Err(Error::invalid_request(format!(
             "OCR document URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
         )));
     }
     if content_length > max_bytes {
         let size_mb = content_length as f64 / (1024.0 * 1024.0);
         let max_size_mb = max_bytes as f64 / (1024.0 * 1024.0);
-        return Err(Error::InvalidRequest(format!(
+        return Err(Error::invalid_request(format!(
             "OCR document size ({size_mb:.2}MB) exceeds maximum allowed size ({max_size_mb:.2}MB). url={url}"
         )));
     }
@@ -242,7 +242,7 @@ async fn read_response_with_limit(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|err| Error::Network(err.to_string()))?
+        .map_err(|err| Error::transport(err.to_string()))?
     {
         bytes_downloaded += chunk.len() as u64;
         enforce_download_size(bytes_downloaded, max_bytes, url)?;
@@ -263,10 +263,7 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> Result<
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&body),
-        });
+        return Err(Error::upstream(status.as_u16(), truncate_error_body(&body)));
     }
     let content_type = response
         .headers()
@@ -286,7 +283,7 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> Result<
     let mut transformed = document
         .as_object()
         .cloned()
-        .ok_or_else(|| Error::InvalidRequest("OCR document must be an object".to_string()))?;
+        .ok_or_else(|| Error::invalid_request("OCR document must be an object".to_string()))?;
     transformed.insert(field.to_string(), Value::String(data_uri));
     Ok(Value::Object(transformed))
 }
@@ -316,7 +313,7 @@ fn operation_status(response_json: &Value) -> Result<&str, Error> {
     let status = response_json
         .get("status")
         .and_then(Value::as_str)
-        .ok_or(Error::MissingField("status"))?;
+        .ok_or(Error::missing_field("status"))?;
     match status {
         "succeeded" => Ok("succeeded"),
         "running" | "notStarted" => Ok("running"),
@@ -326,11 +323,11 @@ fn operation_status(response_json: &Value) -> Result<&str, Error> {
                 .and_then(|error| error.get("message"))
                 .and_then(Value::as_str)
                 .unwrap_or("Unknown error");
-            Err(Error::InvalidResponse(format!(
+            Err(Error::invalid_response(format!(
                 "Azure Document Intelligence analysis failed: {message}"
             )))
         }
-        other => Err(Error::InvalidResponse(format!(
+        other => Err(Error::invalid_response(format!(
             "Unknown operation status: {other}"
         ))),
     }
@@ -344,7 +341,7 @@ pub(super) async fn poll_document_intelligence(
     timeout: Option<Duration>,
 ) -> Result<Value, Error> {
     if !same_origin(operation_url, original_url) {
-        return Err(Error::InvalidResponse(
+        return Err(Error::invalid_response(
             "Azure Document Intelligence: rejected cross-origin polling URL".to_string(),
         ));
     }
@@ -355,7 +352,7 @@ pub(super) async fn poll_document_intelligence(
     ));
     loop {
         if start.elapsed() > timeout {
-            return Err(Error::Network(format!(
+            return Err(Error::transport(format!(
                 "Azure Document Intelligence operation polling timed out after {} seconds",
                 timeout.as_secs()
             )));
@@ -370,21 +367,18 @@ pub(super) async fn poll_document_intelligence(
         let response = request_builder
             .send()
             .await
-            .map_err(|err| Error::Network(err.to_string()))?;
+            .map_err(|err| Error::transport(err.to_string()))?;
         let retry_after = retry_after_secs(&response);
         let status = response.status();
         let text = response
             .text()
             .await
-            .map_err(|err| Error::Network(err.to_string()))?;
+            .map_err(|err| Error::transport(err.to_string()))?;
         if !status.is_success() {
-            return Err(Error::Http {
-                status: status.as_u16(),
-                body: truncate_error_body(&text),
-            });
+            return Err(Error::upstream(status.as_u16(), truncate_error_body(&text)));
         }
         let response_json: Value = serde_json::from_str(&text).map_err(|err| {
-            Error::InvalidResponse(format!("invalid Azure DI poll response JSON: {err}"))
+            Error::invalid_response(format!("invalid Azure DI poll response JSON: {err}"))
         })?;
         if operation_status(&response_json)? == "succeeded" {
             return Ok(response_json);
@@ -423,11 +417,9 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(matches!(
-            error,
-            Error::InvalidRequest(message)
-                if message.contains("SSRF protection")
-        ));
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), litellm_core::ErrorCode::InvalidRequest);
+        assert!(error.message().contains("SSRF protection"));
     }
 
     #[tokio::test]
@@ -519,11 +511,8 @@ mod tests {
         .clone();
 
         let err = string_headers(Some(headers)).expect_err("non-string header rejected");
-        assert_eq!(
-            err,
-            Error::InvalidRequest(
-                "OCR extra_headers.x-retry-count must be a string, got number".to_string()
-            )
-        );
+        assert!(err.is_prepare());
+        assert_eq!(err.code(), litellm_core::ErrorCode::InvalidRequest);
+        assert!(err.message().contains("x-retry-count"));
     }
 }

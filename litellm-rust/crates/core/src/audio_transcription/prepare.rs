@@ -31,13 +31,13 @@ pub fn prepare_audio_transcription_provider_call(
                 })
         })
         .ok_or_else(|| {
-            Error::InvalidProvider(
+            Error::invalid_provider(
                 "unable to resolve custom_llm_provider for audio transcription request".to_string(),
             )
         })?;
     let model = provider_info.model.to_string();
     let config = provider_config(provider_info.custom_llm_provider)
-        .ok_or_else(|| Error::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
+        .ok_or_else(|| Error::invalid_provider(provider_info.custom_llm_provider.to_string()))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers("audio transcription", request.extra_headers)?;
     let auth = config.auth_strategy(&model, &request.optional_params, &env_lookup)?;

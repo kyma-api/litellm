@@ -3,7 +3,7 @@ use litellm_core::audio_transcription::{
     prepare_audio_transcription_provider_call,
 };
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use litellm_core::error::Error;
+use litellm_core::error::{Error, ErrorCode};
 use serde_json::{Map, Value, json};
 use std::future::Future;
 use std::pin::Pin;
@@ -62,17 +62,17 @@ impl AudioTranscriptionLifecycleHooks {
             .await
             .map_err(guardrail_error_to_core_error)?;
         let Value::Object(mut data) = guardrail_request.data else {
-            return Err(Error::InvalidRequest(
+            return Err(Error::invalid_request(
                 "audio transcription pre_call guardrail must return an object".to_string(),
             ));
         };
         let audio = data.remove("audio").ok_or_else(|| {
-            Error::InvalidRequest("audio transcription guardrail removed audio".to_string())
+            Error::invalid_request("audio transcription guardrail removed audio".to_string())
         })?;
         let optional_params = match data.remove("optional_params") {
             Some(Value::Object(value)) => value,
             Some(_) => {
-                return Err(Error::InvalidRequest(
+                return Err(Error::invalid_request(
                     "audio transcription optional_params must be an object".to_string(),
                 ));
             }
@@ -135,12 +135,12 @@ impl AudioTranscriptionLifecycleHooks {
             .await
             .map_err(guardrail_error_to_core_error)?;
         let Value::Object(mut data) = guardrail_request.data else {
-            return Err(Error::InvalidRequest(
+            return Err(Error::invalid_request(
                 "audio transcription during_call guardrail must return an object".to_string(),
             ));
         };
         let body = data.remove("body").ok_or_else(|| {
-            Error::InvalidRequest("audio transcription guardrail removed body".to_string())
+            Error::invalid_request("audio transcription guardrail removed body".to_string())
         })?;
         Ok(request.with_body(body))
     }
@@ -264,21 +264,19 @@ fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
 }
 
 fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
-    Error::InvalidRequest(format!("{}: {}", error.kind, error.message))
+    Error::invalid_request(format!("{}: {}", error.kind, error.message))
 }
 
 fn core_error_kind(error: &Error) -> &'static str {
-    match error {
-        Error::Auth(_) => "AuthError",
-        Error::InvalidProvider(_) => "InvalidProvider",
-        Error::InvalidRequest(_) => "InvalidRequest",
-        Error::InvalidType { .. } => "InvalidType",
-        Error::MissingField(_) => "MissingField",
-        Error::Http { .. } => "HttpError",
-        Error::InvalidResponse(_) => "InvalidResponse",
-        Error::Network(_) => "NetworkError",
-        Error::Connect(_) => "ConnectError",
-        Error::Routing(_) => "RoutingError",
-        Error::Unsupported(_) => "UnsupportedRequest",
+    match error.code() {
+        ErrorCode::Authentication => "AuthError",
+        ErrorCode::Unsupported => "UnsupportedRequest",
+        ErrorCode::InvalidRequest => "InvalidRequest",
+        ErrorCode::Routing => "RoutingError",
+        ErrorCode::Policy => "PolicyError",
+        ErrorCode::Transport => "NetworkError",
+        ErrorCode::Upstream => "HttpError",
+        ErrorCode::InvalidResponse => "InvalidResponse",
+        ErrorCode::Internal => "InternalError",
     }
 }

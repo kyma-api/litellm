@@ -19,14 +19,27 @@ pub mod types;
 use serde_json::{Map, Value};
 
 use handler::execute_chat_completions_provider_call;
-use prepare::{parse_messages, resolve_provider_config, resolve_request};
+use prepare::{parse_messages, prepare_provider_request, resolve_provider_config, resolve_request};
+pub use types::PreparedChatCompletions;
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
+
+pub fn prepare(request: ChatCompletionsRequest<'_>) -> Result<PreparedChatCompletions, Error> {
+    Ok(PreparedChatCompletions {
+        request: prepare_provider_request(resolve_request(request)?)?,
+    })
+}
+
+pub async fn execute(prepared: PreparedChatCompletions) -> Result<ChatCompletionsResponse, Error> {
+    execute_chat_completions_provider_call(prepared)
+        .await
+        .map_err(Error::after_ownership_transfer)
+}
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    execute_chat_completions_provider_call(resolve_request(request)?).await
+    execute(prepare(request)?).await
 }
 
 /// Whether the core would accept this request, without resolving credentials or

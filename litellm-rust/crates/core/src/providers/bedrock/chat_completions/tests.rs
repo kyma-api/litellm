@@ -479,22 +479,25 @@ fn declines_a_response_carrying_a_tool_use_block() {
         "usage": {"inputTokens": 1, "outputTokens": 1}
     }))
     .expect_err("tool use block");
-    assert_eq!(err, Error::Unsupported("non-text response content block"));
+    assert_eq!(
+        err,
+        Error::unsupported_response("non-text response content block")
+    );
 }
 
 #[test]
 fn errors_on_a_response_missing_required_fields() {
     assert_eq!(
         transform_response(json!("nope")).expect_err("not an object"),
-        Error::InvalidResponse("converse response is not an object".to_string())
+        Error::invalid_response("converse response is not an object".to_string())
     );
     assert_eq!(
         transform_response(json!({"usage": {}})).expect_err("no output"),
-        Error::MissingField("output.message.content")
+        Error::missing_response_field("output.message.content")
     );
     assert_eq!(
         transform_response(json!({"output": {"message": {"content": []}}})).expect_err("no usage"),
-        Error::MissingField("usage")
+        Error::missing_response_field("usage")
     );
 }
 

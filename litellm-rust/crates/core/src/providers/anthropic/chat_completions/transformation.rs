@@ -159,12 +159,12 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         let body = response
             .body
             .as_object()
-            .ok_or_else(|| Error::InvalidResponse("messages response is not an object".into()))?;
+            .ok_or_else(|| Error::invalid_response("messages response is not an object".into()))?;
 
         let content = body
             .get("content")
             .and_then(Value::as_array)
-            .ok_or(Error::MissingField("content"))?;
+            .ok_or(Error::missing_response_field("content"))?;
         // The route declines tool and thinking requests, so a non-text block
         // means the response carries something this path never asked for.
         // Decline rather than silently dropping it; the host falls back.
@@ -172,7 +172,9 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             .iter()
             .any(|block| block.get("type").and_then(Value::as_str) != Some("text"))
         {
-            return Err(Error::Unsupported("non-text response content block"));
+            return Err(Error::unsupported_response(
+                "non-text response content block",
+            ));
         }
         let text: String = content
             .iter()
@@ -182,7 +184,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         let usage = body
             .get("usage")
             .and_then(Value::as_object)
-            .ok_or(Error::MissingField("usage"))?;
+            .ok_or(Error::missing_response_field("usage"))?;
         let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
 
         Ok(ChatCompletionsResponse {
@@ -190,7 +192,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             model: body
                 .get("model")
                 .and_then(Value::as_str)
-                .ok_or(Error::MissingField("model"))?
+                .ok_or(Error::missing_response_field("model"))?
                 .to_string(),
             choices: vec![ChatCompletionsChoice {
                 index: 0,

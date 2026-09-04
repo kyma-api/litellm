@@ -10,7 +10,6 @@ use litellm_ai_gateway::integrations::custom_logger::{
 };
 use litellm_ai_gateway::integrations::types::RequestMetadata;
 use litellm_ai_gateway::ocr::{OcrRequest, ocr};
-use litellm_core::error::Error;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -250,14 +249,15 @@ async fn reducto_during_call_guardrail_blocks_before_upload() {
 
     let error = ocr(request).await.expect_err("guardrail blocks upload");
 
-    assert!(matches!(error, Error::InvalidRequest(_)));
+    assert!(error.is_prepare());
+    assert_eq!(error.code(), litellm_core::ErrorCode::InvalidRequest);
     assert_eq!(guardrail.events(), vec!["async_moderation_hook"]);
     let accepted = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
     assert!(accepted.is_err(), "upload socket should not be touched");
 }
 
 #[tokio::test]
-async fn reducto_upload_error_body_is_truncated() {
+async fn reducto_upload_error_body_is_not_exposed() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("test listener binds");
@@ -286,9 +286,10 @@ async fn reducto_upload_error_body_is_truncated() {
 
     let error = ocr(request).await.expect_err("upload should fail");
 
-    assert!(
-        matches!(error, Error::Http { status: 500, body } if body.chars().count() < 300 && body.ends_with("... (truncated)"))
-    );
+    assert_eq!(error.code(), litellm_core::ErrorCode::Upstream);
+    assert_eq!(error.status_code(), Some(500));
+    assert_eq!(error.message(), "upstream request failed with status 500");
+    assert!(!error.message().contains('x'));
     server.await.expect("server task completes");
 }
 
@@ -408,7 +409,8 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
     .await
     .expect_err("provider error propagates");
 
-    assert!(matches!(err, Error::Http { status: 500, .. }));
+    assert_eq!(err.code(), litellm_core::ErrorCode::Upstream);
+    assert_eq!(err.status_code(), Some(500));
     server.await.expect("server task completes");
     assert_eq!(
         logger.events(),
@@ -452,7 +454,8 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
     .await
     .expect_err("guardrail blocks request");
 
-    assert!(matches!(err, Error::InvalidRequest(_)));
+    assert!(err.is_prepare());
+    assert_eq!(err.code(), litellm_core::ErrorCode::InvalidRequest);
     assert_eq!(guardrail.events(), vec!["async_pre_call_hook"]);
     assert_eq!(
         logger.events(),

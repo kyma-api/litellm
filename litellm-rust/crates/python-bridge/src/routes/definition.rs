@@ -196,8 +196,8 @@ mod tests {
             let _drop_guard = drop_guard;
             tokio::task::yield_now().await;
             match inputs.value.as_str() {
-                "error" => Err(Error::InvalidRequest("synthetic error".to_string())),
-                "map_panic" => Err(Error::InvalidRequest("panic in mapper".to_string())),
+                "error" => Err(Error::invalid_request("synthetic error".to_string())),
+                "map_panic" => Err(Error::invalid_request("panic in mapper".to_string())),
                 "panic" => panic!("synthetic panic"),
                 "pending" => {
                     pending::<()>().await;
@@ -208,7 +208,7 @@ mod tests {
         }
 
         fn map_error(error: Error) -> PyErr {
-            if matches!(&error, Error::InvalidRequest(message) if message == "panic in mapper") {
+            if error.is_prepare() && error.message().ends_with("panic in mapper") {
                 panic!("synthetic mapper panic")
             }
             PyLookupError::new_err(error.to_string())

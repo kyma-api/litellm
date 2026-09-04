@@ -29,7 +29,7 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
     let model = provider_info.model.to_string();
     let custom_llm_provider = provider_info.custom_llm_provider.to_string();
     let config = ocr_provider_config(&custom_llm_provider, &model)
-        .ok_or_else(|| litellm_core::Error::InvalidProvider(custom_llm_provider.clone()))
+        .ok_or_else(|| litellm_core::Error::invalid_provider(custom_llm_provider.clone()))
         .and_then(|config| {
             validate_request_format(config, &request.optional_params, &custom_llm_provider)?;
             Ok(config)
@@ -92,10 +92,10 @@ fn validate_request_format(
     match format.as_str() {
         Some("litellm") => Ok(()),
         Some("native") if config.supported_ocr_params().contains(&"req_format") => Ok(()),
-        Some("native") => Err(litellm_core::Error::InvalidRequest(format!(
+        Some("native") => Err(litellm_core::Error::invalid_request(format!(
             "`req_format=native` is not supported for provider {provider}"
         ))),
-        _ => Err(litellm_core::Error::InvalidRequest(format!(
+        _ => Err(litellm_core::Error::invalid_request(format!(
             "Invalid `req_format`: {format}. Expected `litellm` or `native`"
         ))),
     }
@@ -113,7 +113,6 @@ fn new_ocr_call_id() -> String {
 
 #[cfg(test)]
 mod tests {
-    use litellm_core::error::Error;
     use serde_json::{Map, json};
 
     use super::{OcrRequest, prepare_ocr_call};
@@ -148,16 +147,22 @@ mod tests {
     #[test]
     fn native_format_rejected_for_provider_without_support_as_bad_request() {
         let prepared = prepare_ocr_call(request_with_format("native"));
-        assert!(
-            matches!(prepared.request.config, Err(Error::InvalidRequest(message)) if message.contains("not supported for provider"))
-        );
+        let Err(error) = prepared.request.config else {
+            panic!("native format must fail")
+        };
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), litellm_core::ErrorCode::InvalidRequest);
+        assert!(error.message().contains("not supported for provider"));
     }
 
     #[test]
     fn unknown_format_rejected_for_provider_without_support_as_bad_request() {
         let prepared = prepare_ocr_call(request_with_format("raw"));
-        assert!(
-            matches!(prepared.request.config, Err(Error::InvalidRequest(message)) if message.contains("Invalid `req_format`"))
-        );
+        let Err(error) = prepared.request.config else {
+            panic!("unknown format must fail")
+        };
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), litellm_core::ErrorCode::InvalidRequest);
+        assert!(error.message().contains("Invalid `req_format`"));
     }
 }

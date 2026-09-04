@@ -45,6 +45,10 @@ pub(super) struct ProviderChatCompletionsRequest {
     pub(super) timeout: Option<Duration>,
 }
 
+pub struct PreparedChatCompletions {
+    pub(super) request: ProviderChatCompletionsRequest,
+}
+
 /// The provider-shaped request body a config produces. Named rather than a bare
 /// `Value` so the transform contract stays a typed one, mirroring
 /// [`crate::audio_transcription::types::AudioTranscriptionRequestData`].

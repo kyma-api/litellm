@@ -34,7 +34,7 @@ pub fn string_headers(
                 .as_str()
                 .map(|value| (key.clone(), value.to_string()))
                 .ok_or_else(|| {
-                    Error::InvalidRequest(format!(
+                    Error::invalid_request(format!(
                         "{context} extra_headers.{key} must be a string, got {}",
                         json_type_name(&value)
                     ))
@@ -88,7 +88,7 @@ mod tests {
         let err = string_headers("chat completions", Some(headers)).expect_err("non-string value");
         assert_eq!(
             err,
-            Error::InvalidRequest(
+            Error::invalid_request(
                 "chat completions extra_headers.x-trace must be a string, got number".to_string()
             )
         );

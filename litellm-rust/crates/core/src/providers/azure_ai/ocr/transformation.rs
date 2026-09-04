@@ -37,7 +37,7 @@ fn resolve_value(
     non_empty(explicit)
         .map(str::to_string)
         .or_else(|| env_lookup(env_name).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| Error::Auth(missing_message.to_string()))
+        .ok_or_else(|| Error::authentication(missing_message.to_string()))
 }
 
 pub fn resolve_azure_ai_api_key(
@@ -126,7 +126,7 @@ pub fn validate_azure_ai_environment(
     non_empty(azure_ad_token)
         .map(|token| prepend_auth_header(headers, "Authorization", format!("Bearer {token}")))
         .ok_or_else(|| {
-            Error::Auth(
+            Error::authentication(
                 "Missing Azure AI credentials - set AZURE_AI_API_KEY or provide azure_ad_token"
                     .to_string(),
             )
@@ -154,7 +154,7 @@ pub fn validate_document_intelligence_environment(
     non_empty(azure_ad_token)
         .map(|token| prepend_auth_header(headers, "Authorization", format!("Bearer {token}")))
         .ok_or_else(|| {
-            Error::Auth(
+            Error::authentication(
                 "Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or provide azure_ad_token"
                     .to_string(),
             )
@@ -164,7 +164,7 @@ pub fn validate_document_intelligence_environment(
 fn encode_model_id(model: &str) -> Result<String, Error> {
     let model_id = model.rsplit('/').next().unwrap_or(model);
     if matches!(model_id, "." | "..") {
-        return Err(Error::InvalidRequest(
+        return Err(Error::invalid_request(
             "model_id cannot be a dot path segment".to_string(),
         ));
     }
@@ -206,7 +206,7 @@ fn normalize_pages_param(pages: &Value) -> Result<Option<String>, Error> {
             if normalized.split(',').all(pages_token_is_valid) {
                 Ok(Some(normalized))
             } else {
-                Err(Error::InvalidRequest(format!(
+                Err(Error::invalid_request(format!(
                     "Invalid `pages` string for Azure Document Intelligence: {value:?}. Expected format like '1-3,5,7-9'."
                 )))
             }
@@ -216,7 +216,7 @@ fn normalize_pages_param(pages: &Value) -> Result<Option<String>, Error> {
                 return Ok(None);
             }
             if values.iter().any(Value::is_boolean) {
-                return Err(Error::InvalidRequest(
+                return Err(Error::invalid_request(
                     "`pages` must be integers, not booleans".to_string(),
                 ));
             }
@@ -225,7 +225,7 @@ fn normalize_pages_param(pages: &Value) -> Result<Option<String>, Error> {
                 for value in values {
                     let page = value.as_i64().expect("checked is_i64");
                     if page < 0 {
-                        return Err(Error::InvalidRequest(
+                        return Err(Error::invalid_request(
                             "`pages` integers must be >= 0 (Mistral 0-based indices)".to_string(),
                         ));
                     }
@@ -249,16 +249,16 @@ fn normalize_pages_param(pages: &Value) -> Result<Option<String>, Error> {
                 if normalized.split(',').all(pages_token_is_valid) {
                     return Ok(Some(normalized));
                 }
-                return Err(Error::InvalidRequest(format!(
+                return Err(Error::invalid_request(format!(
                     "Invalid `pages` list for Azure Document Intelligence: {values:?}. Expected tokens like '1' or '3-5'."
                 )));
             }
-            Err(Error::InvalidRequest(
+            Err(Error::invalid_request(
                 "`pages` must be a list[int] (0-based, Mistral-style) or a string like '1-3,5,7-9'."
                     .to_string(),
             ))
         }
-        _ => Err(Error::InvalidRequest(
+        _ => Err(Error::invalid_request(
             "`pages` must be a list[int] (0-based, Mistral-style) or a string like '1-3,5,7-9'."
                 .to_string(),
         )),
@@ -273,7 +273,7 @@ fn feature_token_is_valid(token: &str) -> bool {
 }
 
 fn invalid_features_error(features: &Value) -> Error {
-    Error::InvalidRequest(format!(
+    Error::invalid_request(format!(
         "Invalid `features` for Azure Document Intelligence: {features:?}. Expected a list of feature names or a comma-separated string like 'keyValuePairs' or 'keyValuePairs,languages'."
     ))
 }
@@ -308,7 +308,7 @@ fn normalize_features_param(features: &Value) -> Result<Option<String>, Error> {
 fn normalize_req_format(req_format: &Value) -> Result<String, Error> {
     match req_format.as_str() {
         Some(value @ ("native" | "litellm")) => Ok(value.to_string()),
-        _ => Err(Error::InvalidRequest(format!(
+        _ => Err(Error::invalid_request(format!(
             "Invalid `req_format` for Azure Document Intelligence: {req_format:?}. Expected 'native' or 'litellm'."
         ))),
     }
@@ -373,19 +373,18 @@ pub fn complete_document_intelligence_url(
 }
 
 fn document_url_from_mistral_document(document: &Value) -> Result<&str, Error> {
-    let object = document.as_object().ok_or_else(|| Error::InvalidType {
-        expected: "object",
-        actual: json_type_name(document),
-    })?;
+    let object = document
+        .as_object()
+        .ok_or_else(|| Error::invalid_type("object", json_type_name(document)))?;
     let doc_type = object
         .get("type")
         .and_then(Value::as_str)
-        .ok_or(Error::MissingField("document.type"))?;
+        .ok_or(Error::missing_field("document.type"))?;
     let field_name = match doc_type {
         "document_url" => "document_url",
         "image_url" => "image_url",
         other => {
-            return Err(Error::InvalidRequest(format!(
+            return Err(Error::invalid_request(format!(
                 "Invalid document type: {other}. Must be 'document_url' or 'image_url'"
             )));
         }
@@ -394,7 +393,7 @@ fn document_url_from_mistral_document(document: &Value) -> Result<&str, Error> {
         .get(field_name)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or(Error::MissingField(field_name))
+        .ok_or(Error::missing_field(field_name))
 }
 
 fn extract_base64_from_data_uri(data_uri: &str) -> &str {
@@ -443,16 +442,13 @@ fn transform_document_intelligence_response(
 ) -> Result<OcrResponseData, Error> {
     let response = response_json
         .as_object()
-        .ok_or_else(|| Error::InvalidType {
-            expected: "object",
-            actual: json_type_name(&response_json),
-        })?;
+        .ok_or_else(|| Error::invalid_response_type("object", json_type_name(&response_json)))?;
     let status = response
         .get("status")
         .and_then(Value::as_str)
-        .ok_or(Error::MissingField("status"))?;
+        .ok_or(Error::missing_response_field("status"))?;
     if status != "succeeded" {
-        return Err(Error::InvalidResponse(format!(
+        return Err(Error::invalid_response(format!(
             "Azure Document Intelligence analysis failed with status: {status}"
         )));
     }
@@ -857,10 +853,9 @@ mod tests {
         let error =
             map_document_intelligence_ocr_params(&params).expect_err("invalid features must fail");
 
-        assert!(matches!(
-            error,
-            Error::InvalidRequest(message) if message.contains("Invalid `features`")
-        ));
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), crate::error::ErrorCode::InvalidRequest);
+        assert!(error.message().contains("Invalid `features`"));
     }
 
     #[rstest]
@@ -935,7 +930,7 @@ mod tests {
 
         assert_eq!(
             error,
-            Error::InvalidRequest("model_id cannot be a dot path segment".to_string())
+            Error::invalid_request("model_id cannot be a dot path segment".to_string())
         );
     }
 
@@ -988,7 +983,7 @@ mod tests {
 
         assert_eq!(
             error,
-            Error::InvalidResponse(
+            Error::invalid_response(
                 "Azure Document Intelligence analysis failed with status: failed".to_string()
             )
         );
@@ -1079,9 +1074,9 @@ mod tests {
         )]))
         .expect_err("unknown req_format must fail");
 
-        assert!(
-            matches!(error, Error::InvalidRequest(message) if message.contains("Invalid `req_format`"))
-        );
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), crate::error::ErrorCode::InvalidRequest);
+        assert!(error.message().contains("Invalid `req_format`"));
     }
 
     #[test]
@@ -1211,9 +1206,9 @@ mod tests {
         )]))
         .expect_err("invalid pages must fail");
 
-        assert!(
-            matches!(error, Error::InvalidRequest(message) if message.contains("Invalid `pages` string"))
-        );
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), crate::error::ErrorCode::InvalidRequest);
+        assert!(error.message().contains("Invalid `pages` string"));
     }
 
     #[test]
@@ -1224,9 +1219,9 @@ mod tests {
         )]))
         .expect_err("negative pages must fail");
 
-        assert!(
-            matches!(error, Error::InvalidRequest(message) if message.contains("must be >= 0"))
-        );
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), crate::error::ErrorCode::InvalidRequest);
+        assert!(error.message().contains("must be >= 0"));
     }
 
     #[test]
@@ -1237,9 +1232,9 @@ mod tests {
         )]))
         .expect_err("boolean pages must fail");
 
-        assert!(
-            matches!(error, Error::InvalidRequest(message) if message.contains("integers, not booleans"))
-        );
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), crate::error::ErrorCode::InvalidRequest);
+        assert!(error.message().contains("integers, not booleans"));
     }
 
     #[test]
@@ -1250,9 +1245,9 @@ mod tests {
         )]))
         .expect_err("unsupported pages must fail");
 
-        assert!(
-            matches!(error, Error::InvalidRequest(message) if message.contains("Mistral-style"))
-        );
+        assert!(error.is_prepare());
+        assert_eq!(error.code(), crate::error::ErrorCode::InvalidRequest);
+        assert!(error.message().contains("Mistral-style"));
     }
 
     #[test]

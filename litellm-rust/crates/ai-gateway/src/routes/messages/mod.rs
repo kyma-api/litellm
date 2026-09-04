@@ -14,6 +14,7 @@ use serde_json::{Map, Value};
 
 use crate::auth::RequireMasterKey;
 use crate::constants::{MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH};
+use crate::error::Error as GatewayError;
 use crate::state::AppState;
 
 /// This route's contribution to the app router.
@@ -32,18 +33,18 @@ async fn handle(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<Value>,
-) -> Result<Response, MessagesRouteError> {
+) -> Result<Response, GatewayError> {
     let extra_headers = forwarded_headers(&headers)?;
     match service::run(&state.router, body, extra_headers)
         .await
-        .map_err(MessagesRouteError::from)?
+        .map_err(GatewayError::from)?
     {
         service::MessagesResponse::Json(body) => Ok(Json(body).into_response()),
         service::MessagesResponse::Stream(upstream) => stream_response(upstream),
     }
 }
 
-fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRouteError> {
+fn stream_response(upstream: reqwest::Response) -> Result<Response, GatewayError> {
     let content_type = upstream
         .headers()
         .get(CONTENT_TYPE)
@@ -52,7 +53,7 @@ fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRout
     let mut response = Response::builder()
         .status(
             StatusCode::from_u16(upstream.status().as_u16()).map_err(|error| {
-                MessagesRouteError(Error::InvalidResponse(format!(
+                GatewayError::from(Error::invalid_response(format!(
                     "invalid upstream response status: {error}"
                 )))
             })?,
@@ -64,7 +65,7 @@ fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRout
     response
         .body(Body::from_stream(upstream.bytes_stream()))
         .map_err(|error| {
-            MessagesRouteError(Error::InvalidResponse(format!(
+            GatewayError::from(Error::invalid_response(format!(
                 "failed to build streaming response: {error}"
             )))
         })
@@ -80,58 +81,12 @@ fn forwarded_headers(headers: &HeaderMap) -> Result<Option<Map<String, Value>>, 
         })
         .map(|(name, value)| {
             let value = value.to_str().map_err(|_| {
-                Error::InvalidRequest(format!("invalid value for header {}", name.as_str()))
+                Error::invalid_request(format!("invalid value for header {}", name.as_str()))
             })?;
             Ok((name.to_string(), Value::String(value.to_string())))
         })
         .collect::<Result<Map<_, _>, Error>>()?;
     Ok((!forwarded.is_empty()).then_some(forwarded))
-}
-
-#[derive(Debug)]
-struct MessagesRouteError(Error);
-
-impl From<Error> for MessagesRouteError {
-    fn from(error: Error) -> Self {
-        Self(error)
-    }
-}
-
-impl IntoResponse for MessagesRouteError {
-    fn into_response(self) -> Response {
-        let (status, message) = match self.0 {
-            Error::InvalidRequest(message) => (StatusCode::BAD_REQUEST, message),
-            Error::InvalidProvider(_) | Error::Routing(_) => (
-                StatusCode::NOT_FOUND,
-                "no messages deployment is configured for this model".to_string(),
-            ),
-            Error::Auth(_) => (
-                StatusCode::BAD_GATEWAY,
-                "messages provider authentication failed".to_string(),
-            ),
-            Error::Http { .. }
-            | Error::Network(_)
-            | Error::Connect(_)
-            | Error::InvalidResponse(_)
-            | Error::InvalidType { .. }
-            | Error::MissingField(_) => (
-                StatusCode::BAD_GATEWAY,
-                "messages provider request failed".to_string(),
-            ),
-            // The gateway has no Python implementation to decline to, so a
-            // request the core cannot serve is reported to the caller. The
-            // reason is a fixed internal string, never provider content.
-            Error::Unsupported(reason) => (
-                StatusCode::BAD_REQUEST,
-                format!("messages request is not supported: {reason}"),
-            ),
-        };
-        (
-            status,
-            Json(serde_json::json!({"error": {"message": message}})),
-        )
-            .into_response()
-    }
 }
 
 #[cfg(test)]
@@ -448,14 +403,14 @@ mod tests {
             )
             .await
             .expect("route responds");
-        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         let response_body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response body reads");
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&response_body).expect("error is json")["error"]
                 ["message"],
-            "messages provider request failed"
+            "upstream request failed with status 429"
         );
         server.await.expect("upstream task completes");
     }

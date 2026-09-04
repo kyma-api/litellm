@@ -13,6 +13,7 @@ pub(crate) const MESSAGES_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// Max characters of an upstream error body echoed across the call boundary
 /// before truncation, so provider bodies are bounded and data-minimized.
 pub(crate) const UPSTREAM_ERROR_BODY_MAX_CHARS: usize = 256;
+pub(crate) const ERROR_MESSAGE_MAX_CHARS: usize = 1_024;
 
 /// Provider name used for Anthropic Messages when a deployment's provider model
 /// does not carry an explicit provider prefix.
