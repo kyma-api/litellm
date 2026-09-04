@@ -10,8 +10,8 @@ from __future__ import annotations
 import pytest
 
 import litellm
+from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import chat_completions as bridge
-from litellm.rust_bridge import configuration
 from litellm.types.utils import ModelResponse
 
 RUST_RESPONSE = {
@@ -55,6 +55,7 @@ class _FakeNative:
 def _fake_native_bridge(monkeypatch):
     """Expose the bridge's exception classes without the compiled extension."""
     monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeNative())
 
 
 def _hide_native_bridge(monkeypatch):
@@ -244,6 +245,7 @@ def _call_kwargs(model_response: ModelResponse) -> dict:
         "extra_headers": {},
         "timeout": 30.0,
         "on_response": lambda _rust_response: None,
+        "request_override": True,
     }
 
 

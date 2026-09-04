@@ -84,6 +84,7 @@ async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) 
             url="wss://example.test/responses",
             headers={},
             timeout=None,
+            request_override=True,
         )
         is None
     )
@@ -99,6 +100,7 @@ async def test_enabled_bridge_connects_and_adapts_socket(
         url="wss://example.test/responses",
         headers={"Authorization": "Bearer key"},
         timeout=1.0,
+        request_override=True,
     )
 
     assert connection is not None

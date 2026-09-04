@@ -6,6 +6,12 @@ from typing import Final, Protocol, cast
 
 import httpx
 
+from litellm.rust_bridge.runtime import (
+    BridgeErrorContext,
+    RustBridge,
+    always_enabled,
+    identity,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 
@@ -97,6 +103,18 @@ def load_rust_atranscription() -> RustAtranscription | None:
     )
 
 
+_TRANSCRIPTION_ROUTE: Final = RustBridge(
+    route="audio transcription",
+    load=lambda: load_rust_transcription(),
+    enabled=always_enabled,
+)
+_ATRANSCRIPTION_ROUTE: Final = RustBridge(
+    route="audio transcription",
+    load=lambda: load_rust_atranscription(),
+    enabled=always_enabled,
+)
+
+
 def transcription(
     *,
     model: str,
@@ -107,19 +125,20 @@ def transcription(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    rust_transcription: Final = load_rust_transcription()
-    if rust_transcription is None:
-        return None
-    return rust_transcription(
-        model=model,
-        audio=audio,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=timeout_to_seconds(timeout),
+) -> dict[str, object]:
+    return _TRANSCRIPTION_ROUTE.require(
+        call=lambda rust_transcription: rust_transcription(
+            model=model,
+            audio=audio,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=timeout_to_seconds(timeout),
+        ),
+        adapt=identity,
+        context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )
 
 
@@ -133,17 +152,18 @@ async def atranscription(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    rust_atranscription: Final = load_rust_atranscription()
-    if rust_atranscription is None:
-        return None
-    return await rust_atranscription(
-        model=model,
-        audio=audio,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=timeout_to_seconds(timeout),
+) -> dict[str, object]:
+    return await _ATRANSCRIPTION_ROUTE.arequire(
+        call=lambda rust_atranscription: rust_atranscription(
+            model=model,
+            audio=audio,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=timeout_to_seconds(timeout),
+        ),
+        adapt=identity,
+        context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )

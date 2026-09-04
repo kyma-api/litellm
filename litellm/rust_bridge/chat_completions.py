@@ -21,13 +21,17 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.exceptions import APIError
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge.runtime import (
+    BridgeErrorContext,
+    RustBridge,
+    async_none,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.utils import ModelResponse
 
@@ -189,6 +193,23 @@ def _load_rust_decline() -> RustChatCompletionsDecline | None:
     return loaded
 
 
+_CHAT_ROUTE: Final = RustBridge(
+    route="chat completions",
+    load=lambda: load_rust_chat_completions(),
+    enabled=rust_enabled,
+)
+_ACHAT_ROUTE: Final = RustBridge(
+    route="chat completions",
+    load=lambda: load_rust_achat_completions(),
+    enabled=rust_enabled,
+)
+_CHAT_PREFLIGHT: Final = RustBridge(
+    route="chat completions preflight",
+    load=lambda: _load_rust_decline(),
+    enabled=rust_enabled,
+)
+
+
 def _anthropic_user_id_reaches_the_body(litellm_params: Mapping[str, object] | None) -> bool:
     metadata: Final = litellm_params.get("metadata") if litellm_params is not None else None
     try:
@@ -227,6 +248,11 @@ def _litellm_metadata_reaches_the_provider(
             return False
 
 
+def rust_request_override(litellm_params: Mapping[str, object] | None) -> bool | None:
+    raw_request_override: Final = litellm_params.get("rust") if litellm_params is not None else None
+    return raw_request_override if isinstance(raw_request_override, bool) else None
+
+
 def rust_chat_completions_accepts(
     *,
     model: str,
@@ -247,82 +273,17 @@ def rust_chat_completions_accepts(
         return False
     if stream:
         return False
-    request_override: Final = litellm_params.get("rust") if litellm_params is not None else None
-    if not rust_enabled(request_override=request_override if isinstance(request_override, bool) else None):
-        return False
     if _litellm_metadata_reaches_the_provider(custom_llm_provider, litellm_params):
         verbose_logger.debug("Rust chat completions declined (litellm metadata user_id); using the Python path")
         return False
-    decline: Final = _load_rust_decline()
-    if decline is None:
-        return False
-    try:
-        reason: Final = decline(
+    return _CHAT_PREFLIGHT.accepts(
+        request_override=rust_request_override(litellm_params),
+        check=lambda decline: decline(
             model=model,
             messages=messages,
             optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
-        )
-    except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
-        verbose_logger.debug(
-            "Rust chat completions gate raised %s; staying on the Python path",
-            type(rust_error).__name__,
-        )
-        return False
-    if reason is not None:
-        verbose_logger.debug("Rust chat completions declined (%s); using the Python path", reason)
-        return False
-    return True
-
-
-def _rust_bridge_exceptions() -> tuple[type[BaseException], type[BaseException]] | None:
-    """`(declined, upstream_failed)` from the native module, or None when absent."""
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    declined: Final = getattr(native_bridge, "RustBridgeDeclined", None)
-    upstream: Final = getattr(native_bridge, "RustUpstreamError", None)
-    if declined is None or upstream is None:
-        return None
-    return declined, upstream
-
-
-def _reraise_or_decline(
-    rust_error: BaseException,
-    *,
-    model: str,
-    custom_llm_provider: str | None,
-) -> None:
-    """Re-raise a failure the provider already saw, or return so the caller declines.
-
-    A request that never reached the provider is safe to serve on the Python
-    path. One that did is not: the provider has already done the work, so a
-    second attempt bills for it twice. Those surface as an `APIError` carrying
-    the upstream status, which LiteLLM's exception mapping already understands.
-    """
-    exceptions: Final = _rust_bridge_exceptions()
-    if exceptions is None:
-        verbose_logger.debug(
-            "Rust chat completions bridge raised %s; falling back to Python path",
-            type(rust_error).__name__,
-        )
-        return
-    declined, upstream_failed = exceptions
-    if isinstance(rust_error, upstream_failed):
-        args: Final = rust_error.args
-        status: Final = args[0] if args else 0
-        message: Final = args[1] if len(args) > 1 else ""
-        raise APIError(
-            status_code=int(status) or 500,
-            message=f"litellm rust chat completions: {message}",
-            llm_provider=custom_llm_provider or "",
-            model=model,
-        )
-    if not isinstance(rust_error, declined):
-        raise rust_error
-    verbose_logger.debug(
-        "Rust chat completions declined before calling the provider (%s); using the Python path",
-        rust_error,
+        ),
     )
 
 
@@ -352,12 +313,14 @@ def chat_completions(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     on_response: ResponseObserver,
+    request_override: bool | None,
 ) -> ModelResponse | None:
-    rust_chat_completions: Final = load_rust_chat_completions()
-    if rust_chat_completions is None:
-        return None
-    try:
-        rust_response: Final = rust_chat_completions(
+    def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
+        on_response(rust_response)
+        return _build_model_response(rust_response, model_response)
+
+    return _CHAT_ROUTE.invoke(
+        call=lambda rust_chat_completions: rust_chat_completions(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -366,12 +329,12 @@ def chat_completions(
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
             timeout_seconds=timeout_to_seconds(timeout),
-        )
-    except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
-        _reraise_or_decline(rust_error, model=model, custom_llm_provider=custom_llm_provider)
-        return None
-    on_response(rust_response)
-    return _build_model_response(rust_response, model_response)
+        ),
+        fallback=lambda: None,
+        adapt=adapt,
+        context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
+        request_override=request_override,
+    )
 
 
 async def achat_completions(
@@ -386,12 +349,14 @@ async def achat_completions(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     on_response: ResponseObserver,
+    request_override: bool | None,
 ) -> ModelResponse | None:
-    rust_achat_completions: Final = load_rust_achat_completions()
-    if rust_achat_completions is None:
-        return None
-    try:
-        rust_response: Final = await rust_achat_completions(
+    def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
+        on_response(rust_response)
+        return _build_model_response(rust_response, model_response)
+
+    return await _ACHAT_ROUTE.ainvoke(
+        call=lambda rust_achat_completions: rust_achat_completions(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -400,12 +365,12 @@ async def achat_completions(
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
             timeout_seconds=timeout_to_seconds(timeout),
-        )
-    except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
-        _reraise_or_decline(rust_error, model=model, custom_llm_provider=custom_llm_provider)
-        return None
-    on_response(rust_response)
-    return _build_model_response(rust_response, model_response)
+        ),
+        fallback=async_none,
+        adapt=adapt,
+        context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
+        request_override=request_override,
+    )
 
 
 async def achat_completions_or_fallback(
@@ -421,6 +386,7 @@ async def achat_completions_or_fallback(
     timeout: float | httpx.Timeout | None,
     on_response: ResponseObserver,
     python_fallback: Callable[[], Awaitable[object]],
+    request_override: bool | None,
 ) -> object:
     """Await the Rust path, falling back to the caller's own Python path when
     the bridge is unavailable or the call fails.
@@ -430,18 +396,24 @@ async def achat_completions_or_fallback(
     already returned a coroutine by the time a Rust failure surfaces, and so
     cannot fall back on its own.
     """
-    response: Final = await achat_completions(
-        model=model,
-        messages=messages,
-        optional_params=optional_params,
-        model_response=model_response,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        timeout=timeout,
-        on_response=on_response,
+
+    def adapt(rust_response: Mapping[str, object]) -> object:
+        on_response(rust_response)
+        return _build_model_response(rust_response, model_response)
+
+    return await _ACHAT_ROUTE.ainvoke(
+        call=lambda rust_achat_completions: rust_achat_completions(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            timeout_seconds=timeout_to_seconds(timeout),
+        ),
+        fallback=python_fallback,
+        adapt=adapt,
+        context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
+        request_override=request_override,
     )
-    if response is not None:
-        return response
-    return await python_fallback()

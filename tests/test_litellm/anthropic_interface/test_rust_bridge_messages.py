@@ -248,14 +248,14 @@ async def test_gate_invokes_rust_and_marks_response_header():
 
 
 @pytest.mark.asyncio
-async def test_gate_falls_back_to_python_when_bridge_raises():
+async def test_gate_does_not_handoff_on_unknown_bridge_failure():
     bridge = RaisingAsyncMessages()
     litellm.rust(True)
     rust_messages.set_rust_messages(amessages=bridge)
 
-    response = await _gate()
+    with pytest.raises(RuntimeError, match="upstream request failed"):
+        await _gate()
 
-    assert response is None
     assert bridge.calls == 1
 
 

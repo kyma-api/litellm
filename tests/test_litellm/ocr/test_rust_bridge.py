@@ -3,7 +3,8 @@
 import builtins
 import importlib
 import types
-from typing import Any
+from typing import Any, Final
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -259,7 +260,7 @@ def test_env_var_enables_rust_ocr(monkeypatch):
 def test_explicit_false_overrides_process_enable():
     litellm.rust(True)
 
-    assert ocr_main._rust_ocr_enabled(build_prepared_request(litellm_params={"rust": False})) is False
+    assert ocr_main._rust_request_override(build_prepared_request(litellm_params={"rust": False})) is False
 
 
 def test_load_rust_ocr_returns_injected_impl():
@@ -408,14 +409,20 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
 
     rust_bridge.set_rust_ocr(ocr=bridge)
     response = rust_bridge.ocr(
+        prepare=lambda: rust_bridge.RustOCRRequest(
+            model="mistral-ocr-latest",
+            document=DOCUMENT,
+            api_key="sk-test",
+            api_base="https://proxy.internal",
+            custom_llm_provider="mistral",
+            extra_headers={"Authorization": "Bearer sk-test", "x-trace-id": "trace-1"},
+            optional_params={"include_image_base64": True, "pages": [0]},
+            timeout=12.5,
+        ),
         model="mistral-ocr-latest",
-        document=DOCUMENT,
-        api_key="sk-test",
-        api_base="https://proxy.internal",
-        custom_llm_provider="mistral",
-        extra_headers={"Authorization": "Bearer sk-test", "x-trace-id": "trace-1"},
-        optional_params={"include_image_base64": True, "pages": [0]},
-        timeout=12.5,
+        provider="mistral",
+        request_override=True,
+        eligible=True,
     )
 
     assert response == FAKE_OCR_RESPONSE
@@ -443,14 +450,20 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
 
     rust_bridge.set_rust_ocr(aocr=bridge)
     response = await rust_bridge.aocr(
+        prepare=lambda: rust_bridge.RustOCRRequest(
+            model="mistral-ocr-maas",
+            document=DOCUMENT,
+            api_key=None,
+            api_base=None,
+            custom_llm_provider="vertex_ai",
+            extra_headers=None,
+            optional_params={"vertex_project": "project-1"},
+            timeout=httpx.Timeout(30.0, read=42.0),
+        ),
         model="mistral-ocr-maas",
-        document=DOCUMENT,
-        api_key=None,
-        api_base=None,
-        custom_llm_provider="vertex_ai",
-        extra_headers=None,
-        optional_params={"vertex_project": "project-1"},
-        timeout=httpx.Timeout(30.0, read=42.0),
+        provider="vertex_ai",
+        request_override=True,
+        eligible=True,
     )
 
     assert response == FAKE_OCR_RESPONSE
@@ -808,16 +821,20 @@ def test_ocr_passes_default_request_timeout_to_rust(fake_bridge):
     assert fake_bridge.calls[0]["timeout_seconds"] == float(request_timeout)
 
 
-def test_ocr_does_not_route_to_rust_when_disabled():
-    """With the flag off, the bridge must not be consulted even if an impl exists."""
-    bridge = RecordingBridge()
-    litellm.rust(False)
-    rust_bridge.set_rust_ocr(ocr=bridge)
+def test_ocr_disabled_never_loads_or_prepares_rust(monkeypatch: pytest.MonkeyPatch):
+    def fail() -> None:
+        pytest.fail("disabled OCR must not load or prepare Rust")
 
-    assert rust_bridge.rust_ocr_enabled() is False
-    # The impl stays available for injection, but the disabled flag gates usage,
-    # so ocr() never reaches the Rust path (asserted via the enabled-path test).
-    assert bridge.calls == []
+    python_ocr: Final = Mock(return_value=OCRResponse(pages=[], model="mistral-ocr-latest", object="ocr"))
+    litellm.rust(False)
+    monkeypatch.setattr(rust_bridge, "load_rust_ocr", fail)
+    monkeypatch.setattr(ocr_main, "_prepare_rust_ocr_call", fail)
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", python_ocr)
+
+    response: Final = litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert isinstance(response, OCRResponse)
+    python_ocr.assert_called_once()
 
 
 def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):

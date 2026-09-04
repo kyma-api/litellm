@@ -2,16 +2,35 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Final, Protocol, cast  # noqa: TID251  # native extension exposes dynamically typed callables
 
 import httpx
 
 from litellm.rust_bridge import configuration as _configuration
+from litellm.rust_bridge.runtime import (
+    BridgeErrorContext,
+    RustBridge,
+    async_none,
+    identity,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
 
 rust_ocr_enabled = _configuration.rust_ocr_enabled
 rust = _configuration.rust
+
+
+@dataclass(frozen=True, slots=True)
+class RustOCRRequest:
+    model: str
+    document: dict[str, object]
+    api_key: str | None
+    api_base: str | None
+    custom_llm_provider: str | None
+    extra_headers: dict[str, object] | None
+    optional_params: dict[str, object]
+    timeout: float | httpx.Timeout | None
 
 
 class RustOcr(Protocol):
@@ -89,53 +108,75 @@ def load_rust_aocr() -> RustAocr | None:
     return cast(RustAocr, getattr(native_bridge, "aocr", None))
 
 
+_OCR_ROUTE: Final = RustBridge(
+    route="ocr",
+    load=lambda: load_rust_ocr(),
+    enabled=_configuration.rust_ocr_enabled,
+)
+_AOCR_ROUTE: Final = RustBridge(
+    route="ocr",
+    load=lambda: load_rust_aocr(),
+    enabled=_configuration.rust_ocr_enabled,
+)
+
+
 def ocr(
     *,
+    prepare: Callable[[], RustOCRRequest],
     model: str,
-    document: dict[str, object],
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str | None,
-    extra_headers: dict[str, object] | None,
-    optional_params: dict[str, object],
-    timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    rust_ocr: Final = load_rust_ocr()
-    if rust_ocr is None:
-        return None
-    return rust_ocr(
-        model=model,
-        document=document,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=_timeout_to_seconds(timeout),
+    provider: str,
+    request_override: bool | None,
+    eligible: bool,
+) -> Mapping[str, object] | None:
+    return _OCR_ROUTE.invoke(
+        call=lambda rust_ocr: _call_ocr(rust_ocr, prepare()),
+        fallback=lambda: None,
+        adapt=identity,
+        context=BridgeErrorContext(provider=provider, model=model),
+        request_override=request_override,
+        eligible=eligible,
     )
 
 
 async def aocr(
     *,
+    prepare: Callable[[], RustOCRRequest],
     model: str,
-    document: dict[str, object],
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str | None,
-    extra_headers: dict[str, object] | None,
-    optional_params: dict[str, object],
-    timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    rust_aocr: Final = load_rust_aocr()
-    if rust_aocr is None:
-        return None
-    return await rust_aocr(
-        model=model,
-        document=document,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=_timeout_to_seconds(timeout),
+    provider: str,
+    request_override: bool | None,
+    eligible: bool,
+) -> Mapping[str, object] | None:
+    return await _AOCR_ROUTE.ainvoke(
+        call=lambda rust_aocr: _call_aocr(rust_aocr, prepare()),
+        fallback=async_none,
+        adapt=identity,
+        context=BridgeErrorContext(provider=provider, model=model),
+        request_override=request_override,
+        eligible=eligible,
+    )
+
+
+def _call_ocr(rust_ocr: RustOcr, request: RustOCRRequest) -> Mapping[str, object]:
+    return rust_ocr(
+        model=request.model,
+        document=request.document,
+        api_key=request.api_key,
+        api_base=request.api_base,
+        custom_llm_provider=request.custom_llm_provider,
+        extra_headers=request.extra_headers,
+        optional_params=request.optional_params,
+        timeout_seconds=_timeout_to_seconds(request.timeout),
+    )
+
+
+def _call_aocr(rust_aocr: RustAocr, request: RustOCRRequest) -> Awaitable[Mapping[str, object]]:
+    return rust_aocr(
+        model=request.model,
+        document=request.document,
+        api_key=request.api_key,
+        api_base=request.api_base,
+        custom_llm_provider=request.custom_llm_provider,
+        extra_headers=request.extra_headers,
+        optional_params=request.optional_params,
+        timeout_seconds=_timeout_to_seconds(request.timeout),
     )

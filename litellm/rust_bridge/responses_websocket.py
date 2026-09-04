@@ -8,7 +8,13 @@ from typing import Final, Protocol
 import httpx
 from websockets.exceptions import ConnectionClosedOK
 
+from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge.runtime import (
+    BridgeErrorContext,
+    RustBridge,
+    async_none,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 
@@ -65,6 +71,13 @@ def load_rust_responses_websocket() -> RustResponsesWebSocketConnection | None:
     return connection_type
 
 
+_RESPONSES_WEBSOCKET_ROUTE: Final = RustBridge(
+    route="responses websocket",
+    load=lambda: load_rust_responses_websocket(),
+    enabled=rust_enabled,
+)
+
+
 class _ConnectionAdapter:
     def __init__(self, connection: RustResponsesWebSocket):
         self._connection: Final[RustResponsesWebSocket] = connection
@@ -87,16 +100,16 @@ async def connect(
     url: str,
     headers: dict[str, str],
     timeout: float | httpx.Timeout | None,
+    request_override: bool | None = None,
 ) -> _ConnectionAdapter | None:
-    connection_type: Final = load_rust_responses_websocket()
-    if connection_type is None:
-        return None
-    try:
-        connection: Final = await connection_type.connect(
+    return await _RESPONSES_WEBSOCKET_ROUTE.ainvoke(
+        call=lambda connection_type: connection_type.connect(
             url=url,
             headers=headers,
             timeout_seconds=timeout_to_seconds(timeout),
-        )
-    except Exception:  # noqa: BLE001  # bridge failures must fall back to Python
-        return None
-    return _ConnectionAdapter(connection)
+        ),
+        fallback=async_none,
+        adapt=_ConnectionAdapter,
+        context=BridgeErrorContext(provider="openai", model="responses websocket"),
+        request_override=request_override,
+    )

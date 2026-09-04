@@ -83,7 +83,7 @@ def test_loader_returns_none_without_native_extension(monkeypatch: pytest.Monkey
 
 
 def test_dispatch_sync_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rust_bridge, "transcription", lambda **_: None)
+    monkeypatch.setattr(rust_bridge, "load_rust_transcription", lambda: None)
 
     with pytest.raises(RuntimeError, match="bridge is unavailable"):
         BedrockAudioTranscriptionRustDispatch().audio_transcriptions(
@@ -100,10 +100,7 @@ def test_dispatch_sync_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.mark.asyncio
 async def test_dispatch_async_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def unavailable(**_: object) -> None:
-        return None
-
-    monkeypatch.setattr(rust_bridge, "atranscription", unavailable)
+    monkeypatch.setattr(rust_bridge, "load_rust_atranscription", lambda: None)
 
     with pytest.raises(RuntimeError, match="bridge is unavailable"):
         await BedrockAudioTranscriptionRustDispatch().async_audio_transcriptions(
