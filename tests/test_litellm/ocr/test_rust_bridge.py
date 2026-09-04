@@ -66,6 +66,7 @@ class RecordingBridge:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.token_providers: list[object] = []
 
     def __call__(
         self,
@@ -78,7 +79,9 @@ class RecordingBridge:
         optional_params: dict[str, object],
         timeout_seconds: float | None,
         max_document_download_bytes: int,
+        token_provider: object = None,
     ) -> dict[str, object]:
+        self.token_providers.append(token_provider)
         self.calls.append(
             {
                 "model": model,
@@ -100,6 +103,7 @@ class RecordingAsyncBridge:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.token_providers: list[object] = []
 
     async def __call__(
         self,
@@ -112,7 +116,9 @@ class RecordingAsyncBridge:
         optional_params: dict[str, object],
         timeout_seconds: float | None,
         max_document_download_bytes: int,
+        token_provider: object = None,
     ) -> dict[str, object]:
+        self.token_providers.append(token_provider)
         self.calls.append(
             {
                 "model": model,
@@ -141,6 +147,7 @@ class RaisingBridge:
         optional_params: dict[str, object],
         timeout_seconds: float | None,
         max_document_download_bytes: int,
+        token_provider: object = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -157,6 +164,7 @@ class RaisingAsyncBridge:
         optional_params: dict[str, object],
         timeout_seconds: float | None,
         max_document_download_bytes: int,
+        token_provider: object = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -563,10 +571,7 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
         "api_key": "sk-test",
         "api_base": "https://proxy.internal",
         "custom_llm_provider": "mistral",
-        "extra_headers": {
-            "Authorization": "Bearer sk-test",
-            "x-trace-id": "trace-1",
-        },
+        "extra_headers": {"x-trace-id": "trace-1"},
         "optional_params": {"include_image_base64": True},
         "timeout_seconds": 12.5,
         "max_document_download_bytes": 50 * 1024 * 1024,
@@ -673,6 +678,7 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
         "vertex_project": "project-1",
         "vertex_location": "us-central1",
     }
+    assert callable(bridge.token_providers[0])
 
 
 def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_manager():
@@ -715,6 +721,7 @@ def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
     )
 
     assert bridge.calls[0]["api_base"] == "https://azure.example.com"
+    assert callable(bridge.token_providers[0])
 
 
 def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
@@ -761,10 +768,7 @@ def test_run_rust_ocr_runs_pre_call_logging():
     assert complete_input["document"] == DOCUMENT
     assert complete_input["include_image_base64"] is True
     assert additional_args["api_base"] == "https://api.mistral.ai/v1/ocr"
-    assert additional_args["headers"] == {
-        "Authorization": "Bearer sk-test",
-        "x-trace-id": "trace-1",
-    }
+    assert additional_args["headers"] == {"x-trace-id": "trace-1"}
 
 
 def test_ocr_routes_to_rust_when_enabled(fake_bridge):
@@ -784,10 +788,7 @@ def test_ocr_routes_to_rust_when_enabled(fake_bridge):
     assert call["document"] == DOCUMENT
     assert call["api_key"] == "sk-test"
     assert call["custom_llm_provider"] == "mistral"
-    assert call["extra_headers"] == {
-        "Authorization": "Bearer sk-test",
-        "x-trace-id": "trace-1",
-    }
+    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
     assert call["optional_params"].get("include_image_base64") is True
 
 
@@ -869,10 +870,7 @@ async def test_aocr_routes_to_async_rust_when_enabled(fake_async_bridge):
     assert call["document"] == DOCUMENT
     assert call["api_key"] == "sk-test"
     assert call["custom_llm_provider"] == "mistral"
-    assert call["extra_headers"] == {
-        "Authorization": "Bearer sk-test",
-        "x-trace-id": "trace-1",
-    }
+    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
     assert call["optional_params"].get("include_image_base64") is True
 
 

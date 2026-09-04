@@ -40,6 +40,7 @@ class RustOcr(Protocol):
         optional_params: Mapping[str, object],
         timeout_seconds: float | None,
         max_document_download_bytes: int,
+        token_provider: Callable[[], object] | None,
     ) -> Mapping[str, object]:
         raise NotImplementedError
 
@@ -57,6 +58,7 @@ class RustAocr(Protocol):
         optional_params: Mapping[str, object],
         timeout_seconds: float | None,
         max_document_download_bytes: int,
+        token_provider: Callable[[], object] | None,
     ) -> Awaitable[Mapping[str, object]]:
         raise NotImplementedError
 
@@ -84,6 +86,8 @@ class RustOcrPrepare(Protocol):
         extra_headers: Mapping[str, object] | None,
         optional_params: Mapping[str, object],
         timeout_seconds: float | None,
+        max_document_download_bytes: int,
+        token_provider: Callable[[], object] | None,
     ) -> object:
         raise NotImplementedError
 
@@ -100,6 +104,8 @@ class RustAocrPrepare(Protocol):
         extra_headers: Mapping[str, object] | None,
         optional_params: Mapping[str, object],
         timeout_seconds: float | None,
+        max_document_download_bytes: int,
+        token_provider: Callable[[], object] | None,
     ) -> Awaitable[object]:
         raise NotImplementedError
 
@@ -128,6 +134,7 @@ class RustOCRRequest:
     timeout: float | httpx.Timeout | None
     logging_api_base: str | None = None
     max_document_download_bytes: int = 0
+    token_provider: Callable[[], object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,6 +335,7 @@ def _call_ocr(rust_ocr: RustOcr, request: RustOCRRequest) -> Mapping[str, object
         optional_params=request.optional_params,
         timeout_seconds=_timeout_to_seconds(request.timeout),
         max_document_download_bytes=request.max_document_download_bytes,
+        token_provider=request.token_provider,
     )
 
 
@@ -342,6 +350,7 @@ def _call_aocr(rust_aocr: RustAocr, request: RustOCRRequest) -> Awaitable[Mappin
         optional_params=request.optional_params,
         timeout_seconds=_timeout_to_seconds(request.timeout),
         max_document_download_bytes=request.max_document_download_bytes,
+        token_provider=request.token_provider,
     )
 
 
@@ -356,6 +365,7 @@ def _call_prepare(rust_prepare: RustOcrPrepare, request: RustOCRRequest) -> obje
         optional_params=request.optional_params,
         timeout_seconds=_timeout_to_seconds(request.timeout),
         max_document_download_bytes=request.max_document_download_bytes,
+        token_provider=request.token_provider,
     )
 
 
@@ -370,4 +380,5 @@ def _call_aprepare(rust_prepare: RustAocrPrepare, request: RustOCRRequest) -> Aw
         optional_params=request.optional_params,
         timeout_seconds=_timeout_to_seconds(request.timeout),
         max_document_download_bytes=request.max_document_download_bytes,
+        token_provider=request.token_provider,
     )

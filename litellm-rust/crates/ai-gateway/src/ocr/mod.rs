@@ -89,6 +89,7 @@ mod tests {
             api_base: None,
             custom_llm_provider: None,
             extra_headers: None,
+            external_token_provider: None,
             optional_params: Map::new(),
             timeout: None,
             callbacks: Vec::new(),
